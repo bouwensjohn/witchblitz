@@ -1,0 +1,2462 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>Singing waves</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+	<body>
+
+		<div id="info">
+			<a href="https://solutionsandprojects.nl" target="_blank" rel="noopener">Sound and water waves</a> - <span id="waterSize"></span> Github and Reilly Wave Game Off 2025<br/>
+			<button id="openModal" class="help-btn">Help</button>
+		</div>
+
+		<div id="commercial">
+
+			<img src="textures/billboard_2.png" alt="Billboard">
+		</div>
+
+		<!-- This is just a smoothing 'compute shader' for using manually: -->
+		<script id="smoothFragmentShader" type="x-shader/x-fragment">
+
+			uniform sampler2D smoothTexture;
+
+			void main()	{
+
+				vec2 cellSize = 1.0 / resolution.xy;
+
+				vec2 uv = gl_FragCoord.xy * cellSize;
+
+				// Computes the mean of texel and 4 neighbours
+				vec4 textureValue = texture2D( smoothTexture, uv );
+				textureValue += texture2D( smoothTexture, uv + vec2( 0.0, cellSize.y ) );
+				textureValue += texture2D( smoothTexture, uv + vec2( 0.0, - cellSize.y ) );
+				textureValue += texture2D( smoothTexture, uv + vec2( cellSize.x, 0.0 ) );
+				textureValue += texture2D( smoothTexture, uv + vec2( - cellSize.x, 0.0 ) );
+
+				textureValue /= 5.0;
+
+				gl_FragColor = textureValue;
+
+			}
+
+
+
+			function formatTime( ms ) {
+				ms = Math.max( 0, Math.floor( ms ) );
+				const totalSec = Math.floor( ms / 1000 );
+				const m = Math.floor( totalSec / 60 );
+				const s = totalSec % 60;
+				return `${ m.toString().padStart( 2, '0' ) }:${ s.toString().padStart( 2, '0' ) }`;
+			}
+
+			function startGameTimer() {
+				if ( timerIntervalId ) { clearInterval( timerIntervalId ); timerIntervalId = null; }
+				updateTimer();
+				timerIntervalId = setInterval( updateTimer, 250 );
+			}
+
+			function updateTimer() {
+				if ( ! timerEl ) return;
+				const now = ( typeof performance !== 'undefined' && performance.now ) ? performance.now() : Date.now();
+				const left = gameEndMs - now;
+				if ( left <= 0 ) {
+					timerEl.textContent = '00:00';
+					if ( timerIntervalId ) { clearInterval( timerIntervalId ); timerIntervalId = null; }
+					endGame();
+				} else {
+					timerEl.textContent = formatTime( left );
+				}
+			}
+
+			function countBallsInPool() {
+				let count = 0;
+				const ballLimit = BOUNDS_HALF - 0.2 - BALL_RADIUS;
+				for ( const b of floatingBalls ) {
+					if ( Math.abs( b.position.x ) <= ballLimit && Math.abs( b.position.z ) <= ballLimit ) count ++;
+				}
+				return count;
+			}
+
+			function endGame() {
+				if ( gameStopped ) return;
+				gameStopped = true;
+				// Stop ship movement and inputs
+				shipControl.thrust = false; shipControl.left = false; shipControl.right = false;
+				shipSpeed = 0; mousedown = false;
+				const goals = goalScore;
+				const ballsInPool = countBallsInPool();
+				showEndModal( goals, ballsInPool );
+			}
+
+			function showEndModal( goals, balls ) {
+
+				const overlay = document.createElement( 'div' );
+				overlay.id = 'endGameOverlay';
+				overlay.style.position = 'fixed';
+				overlay.style.inset = '0';
+				overlay.style.background = 'rgba(0,0,0,0.6)';
+				overlay.style.zIndex = '20000';
+				overlay.style.pointerEvents = 'auto';
+				overlay.addEventListener( 'pointerdown', ( e ) => { e.stopPropagation(); e.preventDefault(); } );
+				overlay.addEventListener( 'wheel', ( e ) => { e.stopPropagation(); e.preventDefault(); }, { passive: false } );
+
+				const dialog = document.createElement( 'div' );
+				dialog.style.position = 'absolute';
+				dialog.style.top = '50%';
+				dialog.style.left = '50%';
+				dialog.style.transform = 'translate(-50%, -50%)';
+				dialog.style.background = '#111';
+				dialog.style.color = '#fff';
+				dialog.style.padding = '24px 28px';
+				dialog.style.border = '1px solid #444';
+				dialog.style.borderRadius = '10px';
+				dialog.style.boxShadow = '0 8px 24px rgba(0,0,0,0.6)';
+				dialog.style.minWidth = '280px';
+
+				const title = document.createElement( 'div' );
+				title.textContent = `RESULT: ${ goals - balls }`;
+				title.style.font = '700 28px/1.2 system-ui, Arial, sans-serif';
+				title.style.marginBottom = '12px';
+				dialog.appendChild( title );
+
+				const stats = document.createElement( 'div' );
+				stats.style.font = '14px/1.5 system-ui, Arial, sans-serif';
+				stats.innerHTML = `Goals: <b>${ goals }</b><br/>Balls in pool: <b>${ balls }</b>`;
+				dialog.appendChild( stats );
+
+				const btn = document.createElement( 'button' );
+				btn.textContent = 'Play again?';
+				btn.style.marginTop = '16px';
+				btn.style.padding = '8px 12px';
+				btn.style.font = '600 14px system-ui, Arial, sans-serif';
+				btn.style.background = '#2a74ff';
+				btn.style.color = '#fff';
+				btn.style.border = 'none';
+				btn.style.borderRadius = '6px';
+				btn.style.cursor = 'pointer';
+				btn.addEventListener( 'click', ( e ) => { e.preventDefault(); e.stopPropagation(); resetGame( overlay ); } );
+				dialog.appendChild( btn );
+
+				overlay.appendChild( dialog );
+				document.body.appendChild( overlay );
+
+			}
+
+			function resetGame( overlay ) {
+				// Remove all balls
+				for ( const b of floatingBalls ) { try { scene.remove( b ); if ( b.material && b.material !== ballMaterial ) b.material.dispose(); } catch ( _e ) {} }
+				floatingBalls.length = 0;
+				// Reset ship
+				if ( playerShip ) { playerShip.position.set( 0, playerShip.position.y, 0 ); }
+				shipHeading = 0; shipSpeed = 0; if ( shipRecoil ) shipRecoil.set( 0, 0, 0 );
+				// Reset score and HUD
+				goalScore = 0; if ( goalScoreEl ) goalScoreEl.textContent = 'Goals: 0';
+				// Hide modal
+				if ( overlay && overlay.parentNode ) overlay.parentNode.removeChild( overlay );
+				// Restart timer
+				gameStopped = false;
+				gameEndMs = ( typeof performance !== 'undefined' && performance.now ) ? performance.now() + GAME_DURATION_MS : Date.now() + GAME_DURATION_MS;
+				startGameTimer();
+			}
+
+
+		</script>
+
+		<!-- This is a 'compute shader' to read the current level and normal of water at a point -->
+		<!-- It is used with a variable of size 1x1 -->
+		<script id="readWaterLevelFragmentShader" type="x-shader/x-fragment">
+
+			uniform vec2 point1;
+
+			uniform sampler2D levelTexture;
+
+			// Integer to float conversion from https://stackoverflow.com/questions/17981163/webgl-read-pixels-from-floating-point-render-target
+
+			float shift_right( float v, float amt ) {
+
+				v = floor( v ) + 0.5;
+				return floor( v / exp2( amt ) );
+
+			}
+
+			float shift_left( float v, float amt ) {
+
+				return floor( v * exp2( amt ) + 0.5 );
+
+			}
+
+			float mask_last( float v, float bits ) {
+
+				return mod( v, shift_left( 1.0, bits ) );
+
+			}
+
+			float extract_bits( float num, float from, float to ) {
+
+				from = floor( from + 0.5 ); to = floor( to + 0.5 );
+				return mask_last( shift_right( num, from ), to - from );
+
+			}
+
+			vec4 encode_float( float val ) {
+				if ( val == 0.0 ) return vec4( 0, 0, 0, 0 );
+				float sign = val > 0.0 ? 0.0 : 1.0;
+				val = abs( val );
+				float exponent = floor( log2( val ) );
+				float biased_exponent = exponent + 127.0;
+				float fraction = ( ( val / exp2( exponent ) ) - 1.0 ) * 8388608.0;
+				float t = biased_exponent / 2.0;
+				float last_bit_of_biased_exponent = fract( t ) * 2.0;
+				float remaining_bits_of_biased_exponent = floor( t );
+				float byte4 = extract_bits( fraction, 0.0, 8.0 ) / 255.0;
+				float byte3 = extract_bits( fraction, 8.0, 16.0 ) / 255.0;
+				float byte2 = ( last_bit_of_biased_exponent * 128.0 + extract_bits( fraction, 16.0, 23.0 ) ) / 255.0;
+				float byte1 = ( sign * 128.0 + remaining_bits_of_biased_exponent ) / 255.0;
+				return vec4( byte4, byte3, byte2, byte1 );
+			}
+
+			void main()	{
+
+				vec2 cellSize = 1.0 / resolution.xy;
+				float waterLevel = texture2D( levelTexture, point1 ).x;
+
+				vec2 normal = vec2(
+					( texture2D( levelTexture, point1 + vec2( - cellSize.x, 0 ) ).x - texture2D( levelTexture, point1 + vec2( cellSize.x, 0 ) ).x ) * WIDTH / BOUNDS,
+					( texture2D( levelTexture, point1 + vec2( 0, - cellSize.y ) ).x - texture2D( levelTexture, point1 + vec2( 0, cellSize.y ) ).x ) * WIDTH / BOUNDS );
+
+
+				if ( gl_FragCoord.x < 1.5 ) {
+
+					gl_FragColor = encode_float( waterLevel );
+
+				} else if ( gl_FragCoord.x < 2.5 ) {
+
+					gl_FragColor = encode_float( normal.x );
+
+				} else if ( gl_FragCoord.x < 3.5 ) {
+
+					gl_FragColor = encode_float( normal.y );
+
+				} else {
+
+					gl_FragColor = encode_float( 0.0 );
+
+				}
+
+			}
+
+		</script>
+
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "./build/three.module.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three';
+
+			import Stats from 'three/addons/libs/stats.module.js';
+			// import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+			import { GPUComputationRenderer } from 'three/addons/misc/GPUComputationRenderer.js';
+			import { SimplexNoise } from 'three/addons/math/SimplexNoise.js';
+			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+			import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
+			import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+
+			const bb = document.querySelector('#commercial img');
+			if ( bb ) {
+				const i = 1 + Math.floor( Math.random() * 3 );
+				bb.src = `textures/billboard_${ i }.png`;
+				bb.alt = `Billboard ${ i }`;
+			}
+
+			// Texture width for simulation
+			const WIDTH = 128;
+
+			// Water size in system units
+			const BOUNDS = 6;
+			const BOUNDS_HALF = BOUNDS * 0.5;
+
+			let tmpHeightmap = null;
+			const tmpQuat = new THREE.Quaternion();
+			const tmpQuatX = new THREE.Quaternion();
+			const tmpQuatZ = new THREE.Quaternion();
+			let shipModel = null;
+
+			let container, stats;
+			let camera, scene, renderer, controls;
+			let mousedown = false;
+			let mouseButton = -1;
+			let leftDown = false;
+			let rightDown = false;
+			const mouseCoords = new THREE.Vector2();
+			const raycaster = new THREE.Raycaster();
+
+			let sun;
+			let waterMesh;
+			let poolBorder;
+			let meshRay;
+			let gpuCompute;
+			let heightmapVariable;
+			let smoothShader;
+			let readWaterLevelShader;
+			let readWaterLevelRenderTarget;
+			let readWaterLevelImage;
+			const waterNormal = new THREE.Vector3();
+			let followCamera = false;
+			const followCamStore = { position: new THREE.Vector3(), quaternion: new THREE.Quaternion(), target: new THREE.Vector3() };
+			let helpOpen = false;
+			let helpOverlayEl = null;
+
+			let audioCtx = null;
+			let masterGain = null;
+			let activeVoices = new Map();
+			let lastChordId = null;
+			let reverbBus = null;
+			let reverbGain = null;
+			let convolver = null;
+			let currentChordFreqs = null;
+			let rhythmRunning = false;
+			let scheduleId = null;
+			let nextEventTime = 0;
+			let stepIndex = 0;
+			let tempoBpm = 92;
+			let noiseBuffer = null;
+			let scheduleAheadTime = 0.12;
+			let lookaheadMs = 25;
+			let sustainActive = false;
+			let sustainTimer = null;
+			let lowMotionCounter = 0;
+			let lowMotionThreshold = 0.004;
+			let lowMotionFrames = 16;
+			let audioSilenced = false;
+			let audioUnlocked = false;
+			let audioKickDone = false;
+			let transientNodes = new Set();
+
+			function audioInit() {
+
+				if ( audioCtx ) return;
+				const AC = window.AudioContext || window.webkitAudioContext;
+				audioCtx = new AC();
+				masterGain = audioCtx.createGain();
+				masterGain.gain.value = 0.2;
+				masterGain.connect( audioCtx.destination );
+				reverbBus = audioCtx.createGain();
+				reverbBus.gain.value = 0.6;
+				convolver = audioCtx.createConvolver();
+				convolver.buffer = makeImpulseResponse( audioCtx, 2.6, 3.0 );
+				reverbGain = audioCtx.createGain();
+				reverbGain.gain.value = 0.25;
+				reverbBus.connect( convolver );
+				convolver.connect( reverbGain );
+				reverbGain.connect( audioCtx.destination );
+				noiseBuffer = audioCtx.createBuffer( 1, audioCtx.sampleRate, audioCtx.sampleRate );
+				{ const d = noiseBuffer.getChannelData( 0 ); for ( let i = 0; i < d.length; i ++ ) d[ i ] = Math.random() * 2 - 1; }
+			}
+
+			function unlockAudioOnce() {
+
+				if ( audioUnlocked ) return;
+				if ( ! audioCtx ) audioInit();
+				if ( audioCtx ) {
+					try {
+						const p = audioCtx.resume();
+						if ( p && typeof p.then === 'function' ) {
+							p.then( () => { audioUnlocked = ( audioCtx && audioCtx.state === 'running' ); if ( audioUnlocked ) { if ( ! audioKickDone ) { try { silentKick(); } catch ( _e ) {} audioKickDone = true; } try { document.removeEventListener( 'click', unlockAudioOnce, true ); } catch ( _e ) {} try { document.removeEventListener( 'keydown', unlockAudioOnce, true ); } catch ( _e ) {} try { document.removeEventListener( 'touchend', unlockAudioOnce, true ); } catch ( _e ) {} } } ).catch( () => {} );
+						} else {
+							audioUnlocked = ( audioCtx.state === 'running' );
+							if ( audioUnlocked ) { if ( ! audioKickDone ) { try { silentKick(); } catch ( _e ) {} audioKickDone = true; } try { document.removeEventListener( 'click', unlockAudioOnce, true ); } catch ( _e ) {} try { document.removeEventListener( 'keydown', unlockAudioOnce, true ); } catch ( _e ) {} try { document.removeEventListener( 'touchend', unlockAudioOnce, true ); } catch ( _e ) {} }
+						}
+					} catch ( _e ) {}
+				}
+
+			}
+
+			function silentKick() {
+
+				if ( ! audioCtx ) return;
+				try {
+					const osc = audioCtx.createOscillator();
+					const g = audioCtx.createGain();
+					g.gain.value = 0;
+					osc.connect( g ).connect( masterGain );
+					const t = audioCtx.currentTime;
+					osc.start( t );
+					osc.stop( t + 0.03 );
+					transientNodes.add( osc );
+					osc.onended = () => { try { osc.disconnect(); } catch ( _e ) {} transientNodes.delete( osc ); };
+				} catch ( _e ) {}
+
+			}
+
+			function midiToFreq( m ) { return 440 * Math.pow( 2, ( m - 69 ) / 12 ); }
+
+			function makeImpulseResponse( ctx, duration, decay ) {
+				const rate = ctx.sampleRate;
+				const length = Math.floor( rate * duration );
+				const impulse = ctx.createBuffer( 2, length, rate );
+				for ( let c = 0; c < 2; c ++ ) {
+					const ch = impulse.getChannelData( c );
+					for ( let i = 0; i < length; i ++ ) {
+						ch[ i ] = ( Math.random() * 2 - 1 ) * Math.pow( 1 - i / length, decay );
+					}
+				}
+				return impulse;
+			}
+
+			function startRhythm() {
+				if ( ! audioCtx || rhythmRunning ) return;
+				rhythmRunning = true;
+				nextEventTime = audioCtx.currentTime + 0.05;
+				stepIndex = 0;
+				scheduleId = setInterval( schedulerTick, lookaheadMs );
+			}
+
+			function stopRhythm() {
+				if ( ! rhythmRunning ) return;
+				rhythmRunning = false;
+				if ( scheduleId ) { clearInterval( scheduleId ); scheduleId = null; }
+			}
+
+			function schedulerTick() {
+				if ( ! audioCtx ) return;
+				const now = audioCtx.currentTime;
+				const spb = 60 / tempoBpm;
+				const stepDur = 0.25 * spb;
+				while ( nextEventTime < now + scheduleAheadTime ) {
+					scheduleStep( stepIndex, nextEventTime );
+					nextEventTime += stepDur;
+					stepIndex = ( stepIndex + 1 ) % 16;
+				}
+			}
+
+			function scheduleStep( step, time ) {
+				if ( ! currentChordFreqs ) return;
+				if ( step === 0 || step === 8 ) trigKick( time );
+				if ( step === 4 || step === 12 ) trigSnare( time );
+				if ( step % 2 === 0 ) trigHat( time );
+				if ( step % 4 === 2 ) {
+					const base = currentChordFreqs[ Math.floor( Math.random() * currentChordFreqs.length ) ];
+					const f = base * 2.0;
+					trigBell( time, f );
+				}
+			}
+
+			function trigKick( time ) {
+				const osc = audioCtx.createOscillator();
+				osc.type = 'sine';
+				const g = audioCtx.createGain();
+				g.gain.setValueAtTime( 0.001, time );
+				g.gain.exponentialRampToValueAtTime( 0.9, time + 0.01 );
+				g.gain.exponentialRampToValueAtTime( 0.0001, time + 0.28 );
+				osc.frequency.setValueAtTime( 120, time );
+				osc.frequency.exponentialRampToValueAtTime( 45, time + 0.28 );
+				osc.connect( g ).connect( masterGain );
+				osc.start( time );
+				osc.stop( time + 0.3 );
+				transientNodes.add( osc );
+				osc.onended = () => { transientNodes.delete( osc ); };
+			}
+
+			function trigSnare( time ) {
+				const src = audioCtx.createBufferSource();
+				src.buffer = noiseBuffer;
+				const bp = audioCtx.createBiquadFilter();
+				bp.type = 'bandpass';
+				bp.frequency.value = 1800;
+				bp.Q.value = 0.6;
+				const g = audioCtx.createGain();
+				g.gain.setValueAtTime( 0.001, time );
+				g.gain.exponentialRampToValueAtTime( 0.4, time + 0.005 );
+				g.gain.exponentialRampToValueAtTime( 0.0001, time + 0.18 );
+				src.connect( bp ).connect( g );
+				g.connect( masterGain );
+				const send = audioCtx.createGain();
+				send.gain.value = 0.15;
+				g.connect( send ).connect( reverbBus );
+				src.start( time );
+				src.stop( time + 0.2 );
+				transientNodes.add( src );
+				src.onended = () => { transientNodes.delete( src ); };
+			}
+
+			function trigHat( time ) {
+				const src = audioCtx.createBufferSource();
+				src.buffer = noiseBuffer;
+				const hp = audioCtx.createBiquadFilter();
+				hp.type = 'highpass';
+				hp.frequency.value = 7000;
+				hp.Q.value = 0.7;
+				const g = audioCtx.createGain();
+				g.gain.setValueAtTime( 0.001, time );
+				g.gain.exponentialRampToValueAtTime( 0.2, time + 0.002 );
+				g.gain.exponentialRampToValueAtTime( 0.0001, time + 0.06 );
+				src.connect( hp ).connect( g );
+				g.connect( masterGain );
+				src.start( time );
+				src.stop( time + 0.07 );
+				transientNodes.add( src );
+				src.onended = () => { transientNodes.delete( src ); };
+			}
+
+			function trigBell( time, freq ) {
+				const o1 = audioCtx.createOscillator();
+				const o2 = audioCtx.createOscillator();
+				o1.type = 'triangle';
+				o2.type = 'sine';
+				o1.frequency.setValueAtTime( freq, time );
+				o2.frequency.setValueAtTime( freq * 2, time );
+				const g = audioCtx.createGain();
+				g.gain.setValueAtTime( 0.001, time );
+				g.gain.linearRampToValueAtTime( 0.18, time + 0.01 );
+				g.gain.exponentialRampToValueAtTime( 0.0001, time + 1.2 );
+				const lp = audioCtx.createBiquadFilter();
+				lp.type = 'lowpass';
+				lp.frequency.value = 4000;
+				lp.Q.value = 0.0001;
+				o1.connect( lp );
+				o2.connect( lp );
+				lp.connect( g );
+				g.connect( masterGain );
+				const send = audioCtx.createGain();
+				send.gain.value = 0.6;
+				g.connect( send ).connect( reverbBus );
+				o1.start( time );
+				o2.start( time );
+				o1.stop( time + 1.3 );
+				o2.stop( time + 1.3 );
+				transientNodes.add( o1 );
+				transientNodes.add( o2 );
+				o1.onended = () => { transientNodes.delete( o1 ); };
+				o2.onended = () => { transientNodes.delete( o2 ); };
+			}
+
+			function chordForPoint( x, z ) {
+				let u = ( x + BOUNDS_HALF ) / BOUNDS; if ( u < 0 ) u = 0; if ( u > 1 ) u = 1;
+				let v = ( z + BOUNDS_HALF ) / BOUNDS; if ( v < 0 ) v = 0; if ( v > 1 ) v = 1;
+				const degrees = [ 0, 2, 4, 5, 7, 9 ];
+				const sevens = [ [ 0, 4, 7, 11 ], [ 0, 3, 7, 10 ], [ 0, 3, 7, 10 ], [ 0, 4, 7, 11 ], [ 0, 4, 7, 10 ], [ 0, 3, 7, 10 ] ];
+				const idx = Math.round( u * ( degrees.length - 1 ) );
+				const base = 60;
+				let oct = Math.floor( v * 3 ) - 1; if ( oct < - 1 ) oct = - 1; if ( oct > 1 ) oct = 1;
+				const rootMidi = base + degrees[ idx ] + oct * 12;
+				const ints = sevens[ idx ];
+				const mids = ints.map( i => rootMidi + i );
+				return mids.map( midiToFreq );
+			}
+
+			function playChord( freqs ) {
+
+				if ( ! audioCtx ) return;
+				if ( audioSilenced && audioCtx ) {
+					if ( audioCtx.state === 'suspended' ) audioCtx.resume();
+					try { masterGain.connect( audioCtx.destination ); } catch ( _e ) {}
+					try { reverbGain.connect( audioCtx.destination ); } catch ( _e ) {}
+					audioSilenced = false;
+				}
+				const now0 = audioCtx.currentTime;
+				if ( masterGain && masterGain.gain.value < 0.05 ) {
+					masterGain.gain.cancelScheduledValues( now0 );
+					masterGain.gain.setValueAtTime( masterGain.gain.value, now0 );
+					masterGain.gain.linearRampToValueAtTime( 0.2, now0 + 0.08 );
+				}
+				if ( reverbGain && reverbGain.gain.value < 0.02 ) {
+					reverbGain.gain.cancelScheduledValues( now0 );
+					reverbGain.gain.setValueAtTime( reverbGain.gain.value, now0 );
+					reverbGain.gain.linearRampToValueAtTime( 0.25, now0 + 0.08 );
+				}
+				const id = freqs.map( f => f.toFixed( 2 ) ).join( ',' );
+				currentChordFreqs = freqs;
+				if ( ! rhythmRunning ) startRhythm();
+				if ( id === lastChordId ) return;
+				const now = audioCtx.currentTime;
+				const next = new Set( freqs );
+				for ( const [ f, vg ] of activeVoices ) {
+					if ( ! next.has( f ) ) {
+						vg.gain.gain.cancelScheduledValues( now );
+						vg.gain.gain.setTargetAtTime( 0, now, 0.08 );
+						if ( vg.osc1 ) vg.osc1.stop( now + 0.3 );
+						if ( vg.osc2 ) vg.osc2.stop( now + 0.3 );
+						activeVoices.delete( f );
+					}
+				}
+				const per = 0.22 / Math.max( 1, freqs.length * 2 );
+				for ( const f of freqs ) {
+					if ( ! activeVoices.has( f ) ) {
+						const osc1 = audioCtx.createOscillator();
+						const osc2 = audioCtx.createOscillator();
+						osc1.type = 'sawtooth';
+						osc2.type = 'sawtooth';
+						osc1.frequency.setValueAtTime( f, now );
+						osc2.frequency.setValueAtTime( f, now );
+						osc1.detune.value = -7;
+						osc2.detune.value = 7;
+						const filter = audioCtx.createBiquadFilter();
+						filter.type = 'lowpass';
+						filter.frequency.value = 1600;
+						filter.Q.value = 0.7;
+						const g = audioCtx.createGain();
+						g.gain.setValueAtTime( 0, now );
+						g.gain.linearRampToValueAtTime( per, now + 0.04 );
+						g.gain.setTargetAtTime( per, now + 0.04, 0.1 );
+						osc1.connect( filter );
+						osc2.connect( filter );
+						filter.connect( g );
+						g.connect( masterGain );
+						g.connect( reverbBus );
+						osc1.start();
+						osc2.start();
+						activeVoices.set( f, { osc1: osc1, osc2: osc2, gain: g, filter: filter } );
+					}
+				}
+				lastChordId = id;
+			}
+
+			function stopChord() {
+
+				if ( ! audioCtx ) return;
+				const now = audioCtx.currentTime;
+				for ( const [ f, vg ] of activeVoices ) {
+					vg.gain.gain.cancelScheduledValues( now );
+					vg.gain.gain.setTargetAtTime( 0, now, 0.08 );
+					if ( vg.osc1 ) vg.osc1.stop( now + 0.3 );
+					if ( vg.osc2 ) vg.osc2.stop( now + 0.3 );
+				}
+				activeVoices.clear();
+				lastChordId = null;
+				currentChordFreqs = null;
+				stopRhythm();
+			}
+
+			function softStopChord( releaseSec = 2.0, drumStopSec = 0.8 ) {
+				if ( ! audioCtx ) return;
+				const now = audioCtx.currentTime;
+				setTimeout( () => { stopRhythm(); }, Math.max( 0, drumStopSec * 1000 ) );
+				for ( const [ f, vg ] of activeVoices ) {
+					const v = vg.gain.gain.value;
+					vg.gain.gain.cancelScheduledValues( now );
+					vg.gain.gain.setValueAtTime( v, now );
+					vg.gain.gain.linearRampToValueAtTime( 0.0001, now + releaseSec );
+					if ( vg.osc1 ) vg.osc1.stop( now + releaseSec + 0.1 );
+					if ( vg.osc2 ) vg.osc2.stop( now + releaseSec + 0.1 );
+				}
+				setTimeout( () => { activeVoices.clear(); lastChordId = null; currentChordFreqs = null; }, Math.max( 0, releaseSec * 1000 + 120 ) );
+			}
+
+			function initPlayerShip() {
+
+				if ( ! shipModel ) return;
+				const sphere = shipModel.clone();
+				sphere.position.x = 0;
+				sphere.position.z = 0;
+				sphere.userData.velocity = new THREE.Vector3();
+				sphere.receiveShadow = true;
+				sphere.castShadow = true;
+				sphere.visible = shipsEnabled;
+				shipHeading = 0;
+				shipSpeed = 0;
+				if ( shipRecoil ) shipRecoil.set( 0, 0, 0 );
+				scene.add( sphere );
+				playerShip = sphere;
+				ships.length = 0;
+				ships.push( sphere );
+
+			}
+
+			const NUM_SHIP = 12;
+			const ships = [];
+			let shipsEnabled = true;
+			let playerShip = null;
+			let shipHeading = 0;
+			let shipSpeed = 0;
+			let shipRecoil = new THREE.Vector3();
+			const shipControl = { thrust: false, left: false, right: false };
+			const floatingBalls = [];
+			const BALL_RADIUS = 0.06;
+			const SHIP_RADIUS = 0.14;
+			const ballGeometry = new THREE.SphereGeometry( BALL_RADIUS, 16, 12 );
+			const ballMaterial = new THREE.MeshStandardMaterial( { color: 0xff8844, roughness: 0.5, metalness: 0.0 } );
+			let shipPopFrames = 0;
+			const WALKWAY_WIDTH = 2.0;
+			const HALF_OUTER = ( BOUNDS + 2 * WALKWAY_WIDTH ) * 0.5;
+			const GRAVITY = 0.004;
+			const SHOT_UP = 0.06;
+			const SHOT_SPEED = 0.1;
+			const SHOOT_ANGLE_COS = 0.92;
+			const RECOIL_BACK = 0.06;
+			const RECOIL_LAT = 0.05;
+			const RECOIL_DAMP = 0.88;
+			const muzzleFlashes = [];
+			const MUZZLE_FLASH_MS = 140;
+			const muzzleFlashGeometry = new THREE.SphereGeometry( 0.03, 12, 8 );
+			let lastBumpedBall = null;
+			let lastBumpTime = 0;
+			let shootArmedUntil = 0;
+			// Goal posts config
+			const GOAL_GAP = BOUNDS / 5; // separation between poles
+			const GOAL_HALF_GAP = GOAL_GAP * 0.5;
+			const GOAL_POLE_RADIUS = 0.03;
+			const GOAL_POLE_HEIGHT = 1.1;
+			const GOAL_Z = - HALF_OUTER + 0.25; // near far edge, inside pool
+			// Back fence configuration (across the back except between goal posts)
+			const FENCE_Z = - HALF_OUTER + 0.06;
+			const FENCE_HEIGHT = 0.6;
+			const FENCE_THICK = 0.04;
+			const FENCE_EDGE_MARGIN = 0.05;
+			// Game timer and modal state
+			const GAME_DURATION_MS = 10 * 60 * 1000;
+			let timerEl = null;
+			let timerIntervalId = null;
+			let gameEndMs = 0;
+			let gameStopped = false;
+			let goalScore = 0;
+			let goalScoreEl = null;
+			let goalFlashEl = null;
+
+			const MODEL_YAW_OFFSET = Math.PI / 2;
+			const MODEL_HEIGHT_OFFSET = 0.08;
+
+			const simplex = new SimplexNoise();
+
+			let frame = 0;
+
+			const effectController = {
+				mouseSize: 0.2,
+				mouseDeep: 0.01,
+				viscosity: 0.93,
+				speed: 5,
+				shipsEnabled: shipsEnabled,
+				wireframe: false,
+				shadow: false,
+			};
+
+			init();
+
+
+			async function init() {
+
+				container = document.createElement( 'div' );
+				document.body.appendChild( container );
+
+				camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.1, 1000 );
+				camera.position.set( 0, 2.8, 7 );
+				camera.lookAt( 0, 0, 0 );
+
+				scene = new THREE.Scene();
+
+				sun = new THREE.DirectionalLight( 0xFFFFFF, 4.0 );
+				sun.position.set( - 1, 2.6, 1.4 );
+				scene.add( sun );
+
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.toneMapping = THREE.ACESFilmicToneMapping;
+				renderer.toneMappingExposure = 0.5;
+				container.appendChild( renderer.domElement );
+
+				// Make container/canvas focusable for reliable keyboard input
+				container.tabIndex = 0;
+				renderer.domElement.tabIndex = 0;
+				controls = new OrbitControls( camera, container );
+ 
+  				stats = new Stats();
+				// container.appendChild( stats.dom );
+ 
+  				container.style.touchAction = 'none';
+				container.addEventListener( 'pointermove', onPointerMove );
+				container.addEventListener( 'pointerdown', onPointerDown );
+				container.addEventListener( 'pointerup', onPointerUp );
+				container.addEventListener( 'pointercancel', onPointerCancel );
+				container.addEventListener( 'contextmenu', ( e ) => { e.preventDefault(); } );
+				try { document.addEventListener( 'click', unlockAudioOnce, { capture: true } ); } catch ( _e ) {}
+				try { document.addEventListener( 'keydown', unlockAudioOnce, { capture: true } ); } catch ( _e ) {}
+				try { document.addEventListener( 'touchend', unlockAudioOnce, { capture: true } ); } catch ( _e ) {}
+				
+				window.addEventListener( 'resize', onWindowResize );
+				window.addEventListener( 'pointerup', onPointerUp, { capture: true } );
+				window.addEventListener( 'pointercancel', onPointerCancel, { capture: true } );
+				window.addEventListener( 'keydown', onKeyDown, { capture: true } );
+				window.addEventListener( 'keyup', onKeyUp, { capture: true } );
+				document.addEventListener( 'keydown', onKeyDown, { capture: true } );
+				document.addEventListener( 'keyup', onKeyUp, { capture: true } );
+
+				const helpBtn = document.getElementById( 'openModal' );
+				function openHelp() {
+					if ( helpOpen ) return;
+					helpOpen = true;
+					if ( controls ) controls.enabled = false;
+					try { document.body.classList.add( 'modal-open' ); } catch ( _e ) {}
+					const overlay = document.createElement( 'div' );
+					overlay.id = 'helpOverlay';
+					overlay.style.position = 'fixed';
+					overlay.style.inset = '0';
+					overlay.style.background = 'rgba(0,0,0,0.75)';
+					overlay.style.zIndex = '30000';
+					overlay.style.display = 'flex';
+					overlay.style.justifyContent = 'center';
+					overlay.style.alignItems = 'center';
+					overlay.style.pointerEvents = 'auto';
+					const modal = document.createElement( 'div' );
+					modal.style.background = '#222';
+					modal.style.borderRadius = '10px';
+					modal.style.maxWidth = '640px';
+					modal.style.width = '90%';
+					modal.style.maxHeight = '80vh';
+					modal.style.overflowY = 'auto';
+					modal.style.boxShadow = '0 10px 25px rgba(0,0,0,0.6)';
+					modal.style.padding = '1.5rem 1.75rem';
+					modal.style.position = 'relative';
+					modal.style.color = '#f5f5f5';
+					const closeBtn = document.createElement( 'button' );
+					closeBtn.className = 'close-btn';
+					closeBtn.setAttribute( 'aria-label', 'Close' );
+					closeBtn.textContent = '\u00D7';
+					closeBtn.style.position = 'absolute';
+					closeBtn.style.right = '0.9rem';
+					closeBtn.style.top = '0.7rem';
+					closeBtn.style.background = 'none';
+					closeBtn.style.border = 'none';
+					closeBtn.style.color = '#aaa';
+					closeBtn.style.fontSize = '1.3rem';
+					closeBtn.style.cursor = 'pointer';
+					closeBtn.addEventListener( 'mouseenter', () => { closeBtn.style.color = '#fff'; } );
+					closeBtn.addEventListener( 'mouseleave', () => { closeBtn.style.color = '#aaa'; } );
+					closeBtn.addEventListener( 'click', ( e ) => { e.preventDefault(); e.stopPropagation(); closeHelp(); } );
+					const content = document.createElement( 'div' );
+					content.innerHTML = `
+						<h2 id="modalTitle">Game Instructions</h2>
+						<h3>English</h3>
+						<ul>
+							<li><strong>Waves:</strong> Click and move the mouse to generate waves in the water and in the air.</li>
+							<li><strong>Balls:</strong> Right-click to create balls. Move the mouse to interact with water and sound.</li>
+							<li><strong>Sound:</strong> Press <strong>S</strong> to toggle sound on/off.</li>
+							<li><strong>Camera:</strong> Zoom and rotate with the mouse. Press <strong>C</strong> to toggle the ship follow view.</li>
+							<li><strong>Shooting:</strong> Press the <strong>spacebar</strong> to shoot.</li>
+							<li><strong>Boat movement:</strong> Use the <strong>arrow keys</strong> to steer and move.</li>
+							<li><strong>Goal:</strong> Shoot through the goal between the yellow posts.</li>
+							<li><strong>Timer:</strong> You have 10 minutes. Result = Goals − Balls in pool.</li>
+						</ul>
+						<h3>Nederlands</h3>
+						<ul>
+							<li><strong>Golven:</strong> Klik en beweeg de muis om golven in het water en in de lucht te maken.</li>
+							<li><strong>Ballen:</strong> Klik met de rechtermuisknop om ballen te maken. Beweeg de muis om met water en geluid te interacteren.</li>
+							<li><strong>Geluid:</strong> Druk op <strong>S</strong> om het geluid aan/uit te zetten.</li>
+							<li><strong>Camera:</strong> Zoom en roteer met de muis. Druk op <strong>C</strong> voor het volgperspectief.</li>
+							<li><strong>Schieten:</strong> Druk op de <strong>spatiebalk</strong> om te schieten.</li>
+							<li><strong>Boot besturen:</strong> Gebruik de <strong>pijltjestoetsen</strong> om te sturen en te bewegen.</li>
+							<li><strong>Doel:</strong> Schiet ballen door het doel tussen de gele palen.</li>
+							<li><strong>Tijd:</strong> Je hebt 10 minuten. Resultaat = Doelpunten − Ballen in het bad.</li>
+						</ul>`;
+					modal.appendChild( closeBtn );
+					modal.appendChild( content );
+					overlay.appendChild( modal );
+					overlay.addEventListener( 'click', ( e ) => { if ( e.target === overlay ) { e.preventDefault(); e.stopPropagation(); closeHelp(); } } );
+					document.body.appendChild( overlay );
+					helpOverlayEl = overlay;
+				}
+				function closeHelp() {
+					if ( ! helpOpen ) return;
+					try { if ( helpOverlayEl && helpOverlayEl.parentNode ) helpOverlayEl.parentNode.removeChild( helpOverlayEl ); } catch ( _e ) {}
+					helpOverlayEl = null;
+					helpOpen = false;
+					if ( controls ) controls.enabled = ! followCamera;
+					try { document.body.classList.remove( 'modal-open' ); } catch ( _e ) {}
+				}
+				if ( helpBtn ) helpBtn.addEventListener( 'click', ( e ) => { e.preventDefault(); e.stopPropagation(); openHelp(); } );
+				document.addEventListener( 'keydown', ( e ) => { if ( helpOpen && ( e.key === 'Escape' || e.code === 'Escape' ) ) { e.preventDefault(); e.stopPropagation(); closeHelp(); } }, { capture: true } );
+				// Attempt to focus the container so keys work immediately after load
+				try { container.focus(); } catch ( _e ) {}
+				// Ensure header info and commercial billboard are visible above the canvas
+				try {
+					const infoEl = document.getElementById( 'info' );
+					if ( infoEl ) { infoEl.style.display = 'block'; infoEl.style.position = 'fixed'; infoEl.style.zIndex = '29990'; }
+					const commEl = document.getElementById( 'commercial' );
+					if ( commEl ) { commEl.style.display = 'block'; commEl.style.position = 'fixed'; commEl.style.zIndex = '29990'; }
+				} catch ( _e ) {}
+
+
+				const hdrLoader = new HDRLoader().setPath( './textures/equirectangular/' );
+				const glbloader = new GLTFLoader().setPath( 'models/gltf/' );
+				glbloader.setDRACOLoader( new DRACOLoader().setDecoderPath( 'jsm/libs/draco/gltf/' ) );
+
+				// const [ env, model ] = await Promise.all( [ hdrLoader.loadAsync( 'blouberg_sunrise_2_1k.hdr' ), glbloader.loadAsync( 'ship.glb' ) ] );
+				const [ env, model ] = await Promise.all( [ hdrLoader.loadAsync( 'lobe.hdr' ), glbloader.loadAsync( 'ship.glb' ) ] );
+				env.mapping = THREE.EquirectangularReflectionMapping;
+				scene.environment = env;
+				scene.background = env;
+				scene.backgroundBlurriness = 0.3;
+				scene.environmentIntensity = 1.25;
+
+				shipModel = model.scene.children[ 0 ];
+				shipModel.receiveShadow = true;
+				shipModel.castShadow = true;
+
+				const box = new THREE.Box3().setFromObject( shipModel );
+				const size = new THREE.Vector3();
+				box.getSize( size );
+				const maxDim = Math.max( size.x, size.y, size.z );
+				if ( maxDim > 0 ) {
+					const targetDuckMaxDim = 0.28;
+					const uniformScale = targetDuckMaxDim / maxDim;
+					shipModel.scale.multiplyScalar( uniformScale );
+				}
+
+				initPlayerShip();
+
+
+				// const gui = new GUI();
+				// gui.domElement.style.right = '0px';
+
+				const valuesChanger = function () {
+
+					heightmapVariable.material.uniforms[ 'mouseSize' ].value = effectController.mouseSize;
+					heightmapVariable.material.uniforms[ 'deep' ].value = effectController.mouseDeep;
+					heightmapVariable.material.uniforms[ 'viscosity' ].value = effectController.viscosity;
+					shipsEnabled = effectController.shipsEnabled;
+
+					for ( let i = 0; i < ships.length; i ++ ) {
+						ships[ i ].visible = shipsEnabled;
+					}
+
+				};
+
+				// gui.add( effectController, 'mouseSize', 0.1, 1.0, 0.1 ).onChange( valuesChanger );
+				// gui.add( effectController, 'mouseDeep', 0.01, 1.0, 0.01 ).onChange( valuesChanger );
+				// gui.add( effectController, 'viscosity', 0.9, 0.999, 0.001 ).onChange( valuesChanger );
+				// gui.add( effectController, 'speed', 1, 6, 1 );
+				// gui.add( effectController, 'shipsEnabled' ).onChange( valuesChanger );
+				// gui.add( effectController, 'wireframe' ).onChange( ( v )=>{
+
+				// 	waterMesh.material.wireframe = v;
+				// 	poolBorder.material.wireframe = v;
+
+				// } );
+				// gui.add( effectController, 'shadow' ).onChange( addShadow );
+
+				//const buttonSmooth = { smoothWater: function () {smoothWater();} };
+				//gui.add( buttonSmooth, 'smoothWater' );
+
+
+				initWater();
+				addGoalPosts();
+				addBackFence();
+				addBillboardFences();
+				// Create fixed HUD timer and scoreboard at top-left
+				{
+					const tDiv = document.createElement( 'div' );
+					tDiv.id = 'gameTimer';
+					tDiv.style.position = 'fixed';
+					tDiv.style.top = '0';
+					tDiv.style.left = '0';
+					tDiv.style.zIndex = '10000';
+					tDiv.style.padding = '12px 16px';
+					tDiv.style.color = '#ffffff';
+					tDiv.style.background = 'rgba(0,0,0,0.5)';
+					tDiv.style.font = 'bold 24px/1.2 system-ui, Arial, sans-serif';
+					tDiv.textContent = '10:00';
+					document.body.appendChild( tDiv );
+					timerEl = tDiv;
+					const scoreDiv = document.createElement( 'div' );
+					scoreDiv.id = 'goalScore';
+					scoreDiv.style.position = 'fixed';
+					scoreDiv.style.top = '56px';
+					scoreDiv.style.left = '0';
+					scoreDiv.style.zIndex = '10000';
+					scoreDiv.style.padding = '12px 16px';
+					scoreDiv.style.color = '#ffffff';
+					scoreDiv.style.background = 'rgba(0,0,0,0.35)';
+					scoreDiv.style.font = 'bold 20px/1.2 system-ui, Arial, sans-serif';
+					scoreDiv.textContent = 'Goals: 0';
+					document.body.appendChild( scoreDiv );
+					goalScoreEl = scoreDiv;
+				}
+				// Create flash overlay for goal effect
+				{
+					const flash = document.createElement( 'div' );
+					flash.id = 'goalFlash';
+					flash.style.position = 'fixed';
+					flash.style.inset = '0';
+					flash.style.pointerEvents = 'none';
+					flash.style.background = '#ffffff';
+					flash.style.opacity = '0';
+					flash.style.transition = 'opacity 200ms ease';
+					flash.style.zIndex = '9999';
+					document.body.appendChild( flash );
+					goalFlashEl = flash;
+				}
+
+				// Start game timer
+				gameStopped = false;
+				gameEndMs = ( typeof performance !== 'undefined' && performance.now ) ? performance.now() + GAME_DURATION_MS : Date.now() + GAME_DURATION_MS;
+				startGameTimer();
+
+				// createships(); // start with no ships; they will spawn on right-click
+
+				valuesChanger();
+
+				renderer.setAnimationLoop( animate );
+
+			}
+
+
+			function initWater() {
+
+				const geometry = new THREE.PlaneGeometry( BOUNDS, BOUNDS, WIDTH - 1, WIDTH - 1 );
+
+				const material = new WaterMaterial( {
+					color: 0x9bd2ec,
+					metalness: 0.9,
+					roughness: 0,
+					transparent: true,
+					opacity: 0.8,
+					side: THREE.DoubleSide
+				} );
+
+				waterMesh = new THREE.Mesh( geometry, material );
+				waterMesh.rotation.x = - Math.PI * 0.5;
+				waterMesh.matrixAutoUpdate = false;
+				waterMesh.updateMatrix();
+
+				waterMesh.receiveShadow = true;
+				waterMesh.castShadow = true;
+
+				scene.add( waterMesh );
+
+				// pool border
+				const walkwayWidth = 2.0;
+				const outerSize = BOUNDS + 2 * walkwayWidth;
+				const halfOuter = outerSize * 0.5;
+				const halfInner = BOUNDS_HALF;
+				const outer = new THREE.Shape();
+				outer.moveTo( - halfOuter, - halfOuter );
+				outer.lineTo(   halfOuter, - halfOuter );
+				outer.lineTo(   halfOuter,   halfOuter );
+				outer.lineTo( - halfOuter,   halfOuter );
+				outer.lineTo( - halfOuter, - halfOuter );
+				const inner = new THREE.Path();
+				inner.moveTo( - halfInner, - halfInner );
+				inner.lineTo(   halfInner, - halfInner );
+				inner.lineTo(   halfInner,   halfInner );
+				inner.lineTo( - halfInner,   halfInner );
+				inner.lineTo( - halfInner, - halfInner );
+				outer.holes.push( inner );
+				const walkwayGeom = new THREE.ShapeGeometry( outer );
+				walkwayGeom.rotateX( - Math.PI * 0.5 );
+				const tilesTex = ( () => {
+					const size = 256;
+					const groutPx = 28; // grout thickness in pixels
+					const c = document.createElement( 'canvas' );
+					c.width = c.height = size;
+					const g = c.getContext( '2d' );
+					g.fillStyle = '#e5e9ec'; // tile color
+					g.fillRect( 0, 0, size, size );
+					g.fillStyle = '#5f666d'; // grout color
+					g.fillRect( 0, 0, size, groutPx ); // top grout
+					g.fillRect( 0, 0, groutPx, size ); // left grout
+					const tex = new THREE.CanvasTexture( c );
+					if ( 'colorSpace' in tex ) { tex.colorSpace = THREE.SRGBColorSpace; } else { tex.encoding = THREE.sRGBEncoding; }
+					tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+					tex.generateMipmaps = false;
+					tex.minFilter = THREE.NearestFilter;
+					tex.magFilter = THREE.NearestFilter;
+					const tileSize = 2.4; // world units per tile (larger tiles)
+					tex.repeat.set( outerSize / tileSize, outerSize / tileSize );
+					return tex;
+				} )();
+				poolBorder = new THREE.Mesh( walkwayGeom, new THREE.MeshStandardMaterial( { color: 0xffffff, map: tilesTex, roughness: 0.85, metalness: 0.0 } ) );
+				scene.add( poolBorder );
+				poolBorder.receiveShadow = true;
+				poolBorder.castShadow = true;
+
+				// THREE.Mesh just for mouse raycasting
+				const geometryRay = new THREE.PlaneGeometry( BOUNDS, BOUNDS, 1, 1 );
+				meshRay = new THREE.Mesh( geometryRay, new THREE.MeshBasicMaterial( { color: 0xFFFFFF, visible: false } ) );
+				meshRay.rotation.x = - Math.PI / 2;
+				meshRay.matrixAutoUpdate = false;
+				meshRay.updateMatrix();
+				scene.add( meshRay );
+
+
+				// Creates the gpu computation class and sets it up
+
+				gpuCompute = new GPUComputationRenderer( WIDTH, WIDTH, renderer );
+
+				const heightmap0 = gpuCompute.createTexture();
+
+				fillTexture( heightmap0 );
+
+				heightmapVariable = gpuCompute.addVariable( 'heightmap', shaderChange.heightmap_frag, heightmap0 );
+
+				gpuCompute.setVariableDependencies( heightmapVariable, [ heightmapVariable ] );
+
+				const uniforms = heightmapVariable.material.uniforms;
+				uniforms[ 'mousePos' ] = { value: new THREE.Vector2( 10000, 10000 ) };
+				uniforms[ 'mouseSize' ] = { value: 0.2 };
+				uniforms[ 'viscosity' ] = { value: 0.93 };
+				uniforms[ 'deep' ] = { value: 0.01 };
+				uniforms[ 'shipPos' ] = { value: new THREE.Vector2( 10000, 10000 ) };
+				uniforms[ 'shipDeep' ] = { value: 0.0 };
+				heightmapVariable.material.defines.BOUNDS = BOUNDS.toFixed( 1 );
+
+				const error = gpuCompute.init();
+				if ( error !== null ) console.error( error );
+
+				// Create compute shader to smooth the water surface and velocity
+				smoothShader = gpuCompute.createShaderMaterial( document.getElementById( 'smoothFragmentShader' ).textContent, { smoothTexture: { value: null } } );
+
+				// Create compute shader to read water level
+				readWaterLevelShader = gpuCompute.createShaderMaterial( document.getElementById( 'readWaterLevelFragmentShader' ).textContent, {
+					point1: { value: new THREE.Vector2() },
+					levelTexture: { value: null }
+				} );
+				readWaterLevelShader.defines.WIDTH = WIDTH.toFixed( 1 );
+				readWaterLevelShader.defines.BOUNDS = BOUNDS.toFixed( 1 );
+
+				// Create a 4x1 pixel image and a render target (Uint8, 4 channels, 1 byte per channel) to read water height and orientation
+				readWaterLevelImage = new Uint8Array( 4 * 1 * 4 );
+
+				readWaterLevelRenderTarget = new THREE.WebGLRenderTarget( 4, 1, {
+					wrapS: THREE.ClampToEdgeWrapping,
+					wrapT: THREE.ClampToEdgeWrapping,
+					minFilter: THREE.NearestFilter,
+					magFilter: THREE.NearestFilter,
+					format: THREE.RGBAFormat,
+					type: THREE.UnsignedByteType,
+					depthBuffer: false
+				} );
+
+			}
+
+			function fillTexture( texture ) {
+
+				const waterMaxHeight = 0.1;
+
+				function noise( x, y ) {
+
+					let multR = waterMaxHeight;
+					let mult = 0.025;
+					let r = 0;
+					for ( let i = 0; i < 15; i ++ ) {
+
+						r += multR * simplex.noise( x * mult, y * mult );
+						multR *= 0.53 + 0.025 * i;
+						mult *= 1.25;
+
+					}
+
+					return r;
+
+				}
+
+				const pixels = texture.image.data;
+
+				let p = 0;
+				for ( let j = 0; j < WIDTH; j ++ ) {
+
+					for ( let i = 0; i < WIDTH; i ++ ) {
+
+						const x = i * 128 / WIDTH;
+						const y = j * 128 / WIDTH;
+
+						pixels[ p + 0 ] = noise( x, y );
+						pixels[ p + 1 ] = pixels[ p + 0 ];
+						pixels[ p + 2 ] = 0;
+						pixels[ p + 3 ] = 1;
+
+						p += 4;
+
+					}
+
+				}
+
+			}
+
+			function addShadow( v ) {
+
+				renderer.shadowMap.enabled = v;
+				sun.castShadow = v;
+
+				if ( v ) {
+
+					renderer.shadowMap.type = THREE.VSMShadowMap;
+					const shadow = sun.shadow;
+					shadow.mapSize.width = shadow.mapSize.height = 2048;
+					shadow.radius = 2;
+					shadow.bias = - 0.0005;
+					const shadowCam = shadow.camera, s = 5;
+					shadowCam.near = 0.1;
+					shadowCam.far = 6;
+					shadowCam.right = shadowCam.top	= s;
+					shadowCam.left = shadowCam.bottom = - s;
+
+				} else {
+
+					if ( sun.shadow ) sun.shadow.dispose();
+
+				}
+
+				// debug shadow
+				//scene.add(  new THREE.CameraHelper(shadowCam) );
+
+			}
+
+			function smoothWater() {
+
+				const currentRenderTarget = gpuCompute.getCurrentRenderTarget( heightmapVariable );
+				const alternateRenderTarget = gpuCompute.getAlternateRenderTarget( heightmapVariable );
+
+				for ( let i = 0; i < 10; i ++ ) {
+
+					smoothShader.uniforms[ 'smoothTexture' ].value = currentRenderTarget.texture;
+					gpuCompute.doRenderTarget( smoothShader, alternateRenderTarget );
+
+					smoothShader.uniforms[ 'smoothTexture' ].value = alternateRenderTarget.texture;
+					gpuCompute.doRenderTarget( smoothShader, currentRenderTarget );
+
+				}
+
+			}
+
+			function createships() {
+
+				for ( let i = 0; i < NUM_SHIP; i ++ ) {
+
+					let sphere = shipModel;
+					if ( i < NUM_SHIP - 1 ) {
+
+						sphere = shipModel.clone();
+
+					}
+
+					sphere.position.x = ( Math.random() - 0.5 ) * BOUNDS * 0.7;
+					sphere.position.z = ( Math.random() - 0.5 ) * BOUNDS * 0.7;
+
+					sphere.userData.velocity = new THREE.Vector3();
+
+					scene.add( sphere );
+
+					ships[ i ] = sphere;
+
+				}
+
+			}
+
+			function spawnShipAt( x, z ) {
+
+				if ( ! shipModel ) return;
+				const sphere = shipModel.clone();
+				sphere.position.x = Math.max( - BOUNDS_HALF + 0.2, Math.min( BOUNDS_HALF - 0.2, x ) );
+				sphere.position.z = Math.max( - BOUNDS_HALF + 0.2, Math.min( BOUNDS_HALF - 0.2, z ) );
+				sphere.userData.velocity = new THREE.Vector3();
+				sphere.receiveShadow = true;
+				sphere.castShadow = true;
+				sphere.visible = shipsEnabled;
+				scene.add( sphere );
+				ships.push( sphere );
+
+			}
+
+			function spawnBallAt( x, z ) {
+
+				let bx = Math.max( - BOUNDS_HALF + BALL_RADIUS, Math.min( BOUNDS_HALF - BALL_RADIUS, x ) );
+				let bz = Math.max( - BOUNDS_HALF + BALL_RADIUS, Math.min( BOUNDS_HALF - BALL_RADIUS, z ) );
+				const twoR = BALL_RADIUS * 2;
+				const twoR2 = twoR * twoR;
+				for ( let iter = 0; iter < 8; iter ++ ) {
+					let moved = false;
+					for ( let i = 0; i < floatingBalls.length; i ++ ) {
+						const ob = floatingBalls[ i ];
+						const dx = bx - ob.position.x;
+						const dz = bz - ob.position.z;
+						const d2 = dx * dx + dz * dz;
+						if ( d2 < twoR2 ) {
+							const d = Math.sqrt( d2 ) || 1e-6;
+							let nx = dx / d, nz = dz / d;
+							if ( d < 1e-6 ) {
+								const ang = Math.random() * Math.PI * 2;
+								nx = Math.cos( ang ); nz = Math.sin( ang );
+							}
+							const push = ( twoR - d ) + 0.002;
+							bx += nx * push;
+							bz += nz * push;
+							bx = Math.max( - BOUNDS_HALF + BALL_RADIUS, Math.min( BOUNDS_HALF - BALL_RADIUS, bx ) );
+							bz = Math.max( - BOUNDS_HALF + BALL_RADIUS, Math.min( BOUNDS_HALF - BALL_RADIUS, bz ) );
+							moved = true;
+						}
+					}
+					if ( ! moved ) break;
+				}
+				const ball = new THREE.Mesh( ballGeometry, ballMaterial.clone() );
+				ball.position.set( bx, 0, bz );
+				ball.castShadow = true;
+				ball.receiveShadow = true;
+				ball.userData.velocity = new THREE.Vector3();
+				ball.userData.velY = 0;
+				ball.userData.state = 'water';
+				ball.userData.lastZ = ball.position.z;
+				scene.add( ball );
+				floatingBalls.push( ball );
+
+			}
+
+			function resolveBallCollisions() {
+
+				const n = floatingBalls.length;
+				if ( n < 2 ) return;
+				const twoR = BALL_RADIUS * 2;
+				const twoR2 = twoR * twoR;
+				const restitution = 0.6;
+				for ( let i = 0; i < n - 1; i ++ ) {
+					const bi = floatingBalls[ i ];
+					if ( ! bi ) continue;
+					const vi = bi.userData.velocity || ( bi.userData.velocity = new THREE.Vector3() );
+					const si = bi.userData.state || 'water';
+					for ( let j = i + 1; j < n; j ++ ) {
+						const bj = floatingBalls[ j ];
+						if ( ! bj ) continue;
+						const sj = bj.userData.state || 'water';
+						if ( si === 'air' || sj === 'air' ) continue;
+						const dx = bj.position.x - bi.position.x;
+						const dz = bj.position.z - bi.position.z;
+						let d2 = dx * dx + dz * dz;
+						if ( d2 >= twoR2 ) continue;
+						let d = Math.sqrt( d2 );
+						let nx, nz;
+						if ( d < 1e-6 ) {
+							const ang = Math.random() * Math.PI * 2;
+							nx = Math.cos( ang ); nz = Math.sin( ang );
+							d = 1e-6;
+						} else {
+							nx = dx / d; nz = dz / d;
+						}
+						const penetration = ( twoR - d );
+						const corr = penetration * 0.5 + 0.001;
+						bi.position.x -= nx * corr;
+						bi.position.z -= nz * corr;
+						bj.position.x += nx * corr;
+						bj.position.z += nz * corr;
+						const vj = bj.userData.velocity || ( bj.userData.velocity = new THREE.Vector3() );
+						const relvx = vj.x - vi.x;
+						const relvz = vj.z - vi.z;
+						const velAlongNormal = relvx * nx + relvz * nz;
+						if ( velAlongNormal < 0 ) {
+							const jimp = - ( 1 + restitution ) * velAlongNormal / 2;
+							const ix = nx * jimp, iz = nz * jimp;
+							vi.x -= ix; vi.z -= iz;
+							vj.x += ix; vj.z += iz;
+						} else {
+							const kick = 0.02 + 0.03 * ( penetration / twoR );
+							vi.x -= nx * kick * 0.5;
+							vi.z -= nz * kick * 0.5;
+							vj.x += nx * kick * 0.5;
+							vj.z += nz * kick * 0.5;
+						}
+					}
+				}
+
+			}
+
+			function addGoalPosts() {
+
+				const geom = new THREE.CylinderGeometry( GOAL_POLE_RADIUS, GOAL_POLE_RADIUS, GOAL_POLE_HEIGHT, 12 );
+				const mat = new THREE.MeshStandardMaterial( { color: 0xffcc00, roughness: 0.6, metalness: 0.0 } );
+				const y = GOAL_POLE_HEIGHT * 0.5;
+				const left = new THREE.Mesh( geom, mat );
+				left.position.set( - GOAL_HALF_GAP, y, GOAL_Z );
+				left.castShadow = true; left.receiveShadow = true;
+				const right = new THREE.Mesh( geom, mat );
+				right.position.set( GOAL_HALF_GAP, y, GOAL_Z );
+				right.castShadow = true; right.receiveShadow = true;
+				scene.add( left );
+				scene.add( right );
+
+			}
+
+			function addBackFence() {
+
+				// Build two fence segments along back edge, leaving gap between posts
+				const mat = new THREE.MeshStandardMaterial( { color: 0x777b83, roughness: 0.8, metalness: 0.05 } );
+				const y = FENCE_HEIGHT * 0.5;
+				// Left segment spans from left outer edge to left side of goal
+				const leftLen = Math.max( 0.01, HALF_OUTER - GOAL_HALF_GAP - GOAL_POLE_RADIUS - FENCE_EDGE_MARGIN );
+				const leftGeom = new THREE.BoxGeometry( leftLen, FENCE_HEIGHT, FENCE_THICK );
+				const left = new THREE.Mesh( leftGeom, mat );
+				left.position.set( - HALF_OUTER + FENCE_EDGE_MARGIN + leftLen * 0.5, y, FENCE_Z );
+				left.castShadow = true; left.receiveShadow = true;
+				scene.add( left );
+				// Right segment spans from right side of goal to right outer edge
+				const rightLen = Math.max( 0.01, HALF_OUTER - GOAL_HALF_GAP - GOAL_POLE_RADIUS - FENCE_EDGE_MARGIN );
+				const rightGeom = new THREE.BoxGeometry( rightLen, FENCE_HEIGHT, FENCE_THICK );
+				const right = new THREE.Mesh( rightGeom, mat );
+				right.position.set( GOAL_HALF_GAP + GOAL_POLE_RADIUS + rightLen * 0.5, y, FENCE_Z );
+				right.castShadow = true; right.receiveShadow = true;
+				scene.add( right );
+
+			}
+
+			function addBillboardFences() {
+
+				const loader = new THREE.TextureLoader();
+				const texes = [ 1, 2, 3 ].map( i => {
+					const t = loader.load( `textures/billboard_${ i }.png` );
+					if ( 'colorSpace' in t ) { t.colorSpace = THREE.SRGBColorSpace; } else { t.encoding = THREE.sRGBEncoding; }
+					return t;
+				} );
+				function pickTex() { return texes[ Math.floor( Math.random() * texes.length ) ]; }
+				function makePanel( tex, w, h ) {
+					const g = new THREE.PlaneGeometry( w, h );
+					const m = new THREE.MeshStandardMaterial( { map: tex, roughness: 0.8, metalness: 0.05 } );
+					const mesh = new THREE.Mesh( g, m );
+					mesh.castShadow = true;
+					mesh.receiveShadow = true;
+					return mesh;
+				}
+				const y = FENCE_HEIGHT * 0.5;
+				const margin = FENCE_EDGE_MARGIN;
+				const total = HALF_OUTER * 2 - 2 * margin;
+				const panelW = 1.6;
+				const gap = 0.06;
+				const n = Math.max( 1, Math.floor( ( total + gap ) / ( panelW + gap ) ) );
+				const used = n * panelW + ( n - 1 ) * gap;
+				const start = - HALF_OUTER + margin + ( total - used ) * 0.5 + panelW * 0.5;
+				const h = FENCE_HEIGHT;
+				for ( let i = 0; i < n; i ++ ) {
+					const p = makePanel( pickTex(), panelW, h );
+					p.position.set( start + i * ( panelW + gap ), y, HALF_OUTER - margin );
+					p.rotation.y = Math.PI;
+					scene.add( p );
+				}
+				for ( let i = 0; i < n; i ++ ) {
+					const p = makePanel( pickTex(), panelW, h );
+					p.position.set( - HALF_OUTER + margin, y, start + i * ( panelW + gap ) );
+					p.rotation.y = Math.PI * 0.5;
+					scene.add( p );
+				}
+				for ( let i = 0; i < n; i ++ ) {
+					const p = makePanel( pickTex(), panelW, h );
+					p.position.set( HALF_OUTER - margin, y, start + i * ( panelW + gap ) );
+					p.rotation.y = - Math.PI * 0.5;
+					scene.add( p );
+				}
+
+			}
+
+			function formatTime( ms ) {
+				ms = Math.max( 0, Math.floor( ms ) );
+				const totalSec = Math.floor( ms / 1000 );
+				const m = Math.floor( totalSec / 60 );
+				const s = totalSec % 60;
+				return `${ m.toString().padStart( 2, '0' ) }:${ s.toString().padStart( 2, '0' ) }`;
+			}
+
+			function startGameTimer() {
+				if ( timerIntervalId ) { clearInterval( timerIntervalId ); timerIntervalId = null; }
+				updateTimer();
+				timerIntervalId = setInterval( updateTimer, 250 );
+			}
+
+			function updateTimer() {
+				if ( ! timerEl ) return;
+				const now = ( typeof performance !== 'undefined' && performance.now ) ? performance.now() : Date.now();
+				const left = gameEndMs - now;
+				if ( left <= 0 ) {
+					timerEl.textContent = '00:00';
+					if ( timerIntervalId ) { clearInterval( timerIntervalId ); timerIntervalId = null; }
+					endGame();
+				} else {
+					timerEl.textContent = formatTime( left );
+				}
+			}
+
+			function countBallsInPool() {
+				let count = 0;
+				const ballLimit = BOUNDS_HALF - 0.2 - BALL_RADIUS;
+				for ( const b of floatingBalls ) {
+					if ( Math.abs( b.position.x ) <= ballLimit && Math.abs( b.position.z ) <= ballLimit ) count ++;
+				}
+				return count;
+			}
+
+			function endGame() {
+				if ( gameStopped ) return;
+				gameStopped = true;
+				// Stop ship movement and inputs
+				shipControl.thrust = false; shipControl.left = false; shipControl.right = false;
+				shipSpeed = 0; mousedown = false;
+				const goals = goalScore;
+				const ballsInPool = countBallsInPool();
+				showEndModal( goals, ballsInPool );
+			}
+
+			function showEndModal( goals, balls ) {
+
+				const overlay = document.createElement( 'div' );
+				overlay.id = 'endGameOverlay';
+				overlay.style.position = 'fixed';
+				overlay.style.inset = '0';
+				overlay.style.background = 'rgba(0,0,0,0.6)';
+				overlay.style.zIndex = '20000';
+				overlay.style.pointerEvents = 'auto';
+				overlay.addEventListener( 'pointerdown', ( e ) => { e.stopPropagation(); e.preventDefault(); } );
+				overlay.addEventListener( 'wheel', ( e ) => { e.stopPropagation(); e.preventDefault(); }, { passive: false } );
+
+				const dialog = document.createElement( 'div' );
+				dialog.style.position = 'absolute';
+				dialog.style.top = '50%';
+				dialog.style.left = '50%';
+				dialog.style.transform = 'translate(-50%, -50%)';
+				dialog.style.background = '#111';
+				dialog.style.color = '#fff';
+				dialog.style.padding = '24px 28px';
+				dialog.style.border = '1px solid #444';
+				dialog.style.borderRadius = '10px';
+				dialog.style.boxShadow = '0 8px 24px rgba(0,0,0,0.6)';
+				dialog.style.minWidth = '280px';
+
+				const title = document.createElement( 'div' );
+				title.textContent = `RESULT: ${ goals - balls }`;
+				title.style.font = '700 28px/1.2 system-ui, Arial, sans-serif';
+				title.style.marginBottom = '12px';
+				dialog.appendChild( title );
+
+				const stats = document.createElement( 'div' );
+				stats.style.font = '14px/1.5 system-ui, Arial, sans-serif';
+				stats.innerHTML = `Goals: <b>${ goals }</b><br/>Balls in pool: <b>${ balls }</b>`;
+				dialog.appendChild( stats );
+
+				const btn = document.createElement( 'button' );
+				btn.textContent = 'Play again?';
+				btn.style.marginTop = '16px';
+				btn.style.padding = '8px 12px';
+				btn.style.font = '600 14px system-ui, Arial, sans-serif';
+				btn.style.background = '#2a74ff';
+				btn.style.color = '#fff';
+				btn.style.border = 'none';
+				btn.style.borderRadius = '6px';
+				btn.style.cursor = 'pointer';
+				btn.addEventListener( 'click', ( e ) => { e.preventDefault(); e.stopPropagation(); resetGame( overlay ); } );
+				dialog.appendChild( btn );
+
+				overlay.appendChild( dialog );
+				document.body.appendChild( overlay );
+
+			}
+
+			function resetGame( overlay ) {
+				// Remove all balls
+				for ( const b of floatingBalls ) { try { scene.remove( b ); if ( b.material && b.material !== ballMaterial ) b.material.dispose(); } catch ( _e ) {} }
+				floatingBalls.length = 0;
+				// Reset ship
+				if ( playerShip ) { playerShip.position.set( 0, playerShip.position.y, 0 ); }
+				shipHeading = 0; shipSpeed = 0;
+				// Reset score and HUD
+				goalScore = 0; if ( goalScoreEl ) goalScoreEl.textContent = 'Goals: 0';
+				// Hide modal
+				if ( overlay && overlay.parentNode ) overlay.parentNode.removeChild( overlay );
+				// Restart timer
+				gameStopped = false;
+				gameEndMs = ( typeof performance !== 'undefined' && performance.now ) ? performance.now() + GAME_DURATION_MS : Date.now() + GAME_DURATION_MS;
+				startGameTimer();
+			}
+
+			function playGoalSfx() {
+
+				if ( ! audioCtx ) audioInit();
+				if ( ! audioCtx || audioSilenced ) return;
+				const now = audioCtx.currentTime;
+				const osc = audioCtx.createOscillator();
+				osc.type = 'triangle';
+				const g = audioCtx.createGain();
+				g.gain.setValueAtTime( 0.001, now );
+				g.gain.exponentialRampToValueAtTime( 0.3, now + 0.02 );
+				g.gain.exponentialRampToValueAtTime( 0.0001, now + 0.5 );
+				osc.frequency.setValueAtTime( 440, now );
+				osc.frequency.exponentialRampToValueAtTime( 880, now + 0.25 );
+				const send = audioCtx.createGain();
+				send.gain.value = 0.25;
+				g.connect( masterGain );
+				g.connect( send ).connect( reverbBus );
+				osc.connect( g );
+				osc.start( now );
+				osc.stop( now + 0.5 );
+				transientNodes.add( osc );
+				osc.onended = () => { try { osc.disconnect(); } catch ( _e ) {} transientNodes.delete( osc ); };
+
+			}
+
+			function playShootSfx() {
+
+				if ( ! audioCtx ) audioInit();
+				if ( ! audioCtx || audioSilenced ) return;
+				const now = audioCtx.currentTime;
+
+				// Bright noise burst
+				const src = audioCtx.createBufferSource();
+				src.buffer = noiseBuffer;
+				const hp = audioCtx.createBiquadFilter();
+				hp.type = 'highpass';
+				hp.frequency.value = 1200;
+				hp.Q.value = 0.7;
+				const bp = audioCtx.createBiquadFilter();
+				bp.type = 'bandpass';
+				bp.frequency.value = 2200;
+				bp.Q.value = 0.9;
+				const g = audioCtx.createGain();
+				g.gain.setValueAtTime( 0.001, now );
+				g.gain.exponentialRampToValueAtTime( 4.0, now + 0.004 );
+				g.gain.exponentialRampToValueAtTime( 0.0001, now + 0.1 );
+				src.connect( hp ).connect( bp ).connect( g );
+				g.connect( masterGain );
+				const send = audioCtx.createGain();
+				send.gain.value = 0.8;
+				g.connect( send ).connect( reverbBus );
+				src.start( now );
+				src.stop( now + 0.12 );
+				transientNodes.add( src );
+				src.onended = () => { transientNodes.delete( src ); };
+
+				// Short tonal snap
+				const osc = audioCtx.createOscillator();
+				osc.type = 'triangle';
+				osc.frequency.setValueAtTime( 900, now );
+				osc.frequency.exponentialRampToValueAtTime( 220, now + 0.08 );
+				const g2 = audioCtx.createGain();
+				g2.gain.setValueAtTime( 0.001, now );
+				g2.gain.exponentialRampToValueAtTime( 0.35, now + 0.003 );
+				g2.gain.exponentialRampToValueAtTime( 0.0001, now + 0.08 );
+				osc.connect( g2 ).connect( masterGain );
+				const send2 = audioCtx.createGain();
+				send2.gain.value = 0.12;
+				g2.connect( send2 ).connect( reverbBus );
+				osc.start( now );
+				osc.stop( now + 0.09 );
+				transientNodes.add( osc );
+				osc.onended = () => { transientNodes.delete( osc ); };
+
+			}
+
+			function triggerGoalFlash() {
+
+				if ( ! goalFlashEl ) return;
+				goalFlashEl.style.opacity = '0.85';
+				setTimeout( () => { if ( goalFlashEl ) goalFlashEl.style.opacity = '0'; }, 20 );
+
+			}
+
+			function shootBallIfBumping() {
+
+				if ( ! playerShip ) return;
+				const now = ( typeof performance !== 'undefined' && performance.now ) ? performance.now() : Date.now();
+				let target = null;
+				if ( lastBumpedBall && now - lastBumpTime <= 1200 ) {
+					target = lastBumpedBall;
+				} else {
+					let best = null;
+					let bestDistSq = Infinity;
+					const sp = playerShip.position;
+					for ( let j = 0; j < floatingBalls.length; j ++ ) {
+						const b = floatingBalls[ j ];
+						const dx = b.position.x - sp.x;
+						const dz = b.position.z - sp.z;
+						const minDist = SHIP_RADIUS + BALL_RADIUS + 0.15;
+						const d2 = dx * dx + dz * dz;
+						if ( d2 < minDist * minDist && d2 < bestDistSq ) { best = b; bestDistSq = d2; }
+					}
+					target = best;
+				}
+				if ( ! target ) return;
+				const fwd = new THREE.Vector3( Math.cos( shipHeading ), 0, Math.sin( shipHeading ) ).normalize();
+				const sp2 = playerShip.position;
+				const toBall = new THREE.Vector3( target.position.x - sp2.x, 0, target.position.z - sp2.z );
+				const dist = Math.sqrt( toBall.x * toBall.x + toBall.z * toBall.z ) || 1e-6;
+				toBall.multiplyScalar( 1 / dist );
+				if ( toBall.dot( fwd ) < SHOOT_ANGLE_COS ) return;
+				const vel = target.userData.velocity || ( target.userData.velocity = new THREE.Vector3() );
+				vel.x = fwd.x * SHOT_SPEED;
+				vel.z = fwd.z * SHOT_SPEED;
+				target.userData.velY = SHOT_UP;
+				target.userData.state = 'air';
+				if ( target.position.y < BALL_RADIUS + 0.001 ) target.position.y = BALL_RADIUS + 0.001;
+				spawnMuzzleFlash( sp2, fwd );
+				playShootSfx();
+				{
+					const right = new THREE.Vector3( - fwd.z, 0, fwd.x );
+					const lateral = Math.sign( toBall.dot( right ) || 0 );
+					shipRecoil.addScaledVector( fwd, - RECOIL_BACK );
+					if ( lateral !== 0 ) shipRecoil.addScaledVector( right, - lateral * RECOIL_LAT );
+				}
+			}
+
+			function spawnMuzzleFlash( basePos, fwd ) {
+
+				try {
+					const pos = new THREE.Vector3().copy( basePos ).addScaledVector( fwd, 0.18 ).add( new THREE.Vector3( 0, 0.08, 0 ) );
+					const mat = new THREE.MeshBasicMaterial( { color: 0x8b4513, transparent: true, opacity: 1.0, blending: THREE.AdditiveBlending, depthWrite: false } );
+					const mesh = new THREE.Mesh( muzzleFlashGeometry, mat );
+					mesh.position.copy( pos );
+					mesh.scale.set( 1, 1, 1 );
+					scene.add( mesh );
+					const light = new THREE.PointLight( 0x8b4513, 10.0, 1.5, 2.0 );
+					light.position.copy( pos );
+					scene.add( light );
+					muzzleFlashes.push( { mesh, light, t0: ( typeof performance !== 'undefined' && performance.now ) ? performance.now() : Date.now(), life: MUZZLE_FLASH_MS } );
+				} catch ( _e ) {}
+
+			}
+
+			function updateMuzzleFlashes() {
+
+				if ( muzzleFlashes.length === 0 ) return;
+				const now = ( typeof performance !== 'undefined' && performance.now ) ? performance.now() : Date.now();
+				for ( let i = muzzleFlashes.length - 1; i >= 0; i -- ) {
+					const f = muzzleFlashes[ i ];
+					const dt = now - f.t0;
+					const a = Math.max( 0, 1 - dt / f.life );
+					try {
+						if ( f.mesh && f.mesh.material ) {
+							f.mesh.material.opacity = a;
+							const s = 1 + 1.4 * ( 1 - a );
+							f.mesh.scale.set( s, s, s );
+						}
+						if ( f.light ) f.light.intensity = 10.0 * a;
+					} catch ( _e ) {}
+					if ( dt >= f.life ) {
+						try { if ( f.mesh ) { scene.remove( f.mesh ); if ( f.mesh.material ) f.mesh.material.dispose(); } } catch ( _e ) {}
+						try { if ( f.light ) { scene.remove( f.light ); } } catch ( _e ) {}
+						muzzleFlashes.splice( i, 1 );
+					}
+				}
+
+			}
+
+			function toggleFollowCamera() {
+
+				followCamera = ! followCamera;
+				if ( followCamera ) {
+					followCamStore.position.copy( camera.position );
+					followCamStore.quaternion.copy( camera.quaternion );
+					if ( controls && controls.target ) followCamStore.target.copy( controls.target );
+					if ( controls ) controls.enabled = false;
+					snapFollowCamera();
+				} else {
+					camera.position.copy( followCamStore.position );
+					camera.quaternion.copy( followCamStore.quaternion );
+					camera.updateMatrixWorld();
+					if ( controls ) {
+						if ( controls.target ) controls.target.copy( followCamStore.target );
+						controls.enabled = true;
+						if ( typeof controls.update === 'function' ) controls.update();
+					}
+				}
+
+			}
+
+			function snapFollowCamera() {
+
+				if ( ! playerShip ) return;
+				const shipPos = playerShip.position;
+				const fwd = new THREE.Vector3( Math.cos( shipHeading ), 0, Math.sin( shipHeading ) ).normalize();
+				const desired = new THREE.Vector3().copy( shipPos ).addScaledVector( fwd, - 1.1 ).add( new THREE.Vector3( 0, 0.5, 0 ) );
+				camera.position.copy( desired );
+				const lookAt = new THREE.Vector3().copy( shipPos ).addScaledVector( fwd, 0.6 );
+				camera.lookAt( lookAt );
+
+			}
+
+			function updateFollowCamera() {
+
+				if ( ! followCamera || ! playerShip ) return;
+				const shipPos = playerShip.position;
+				const fwd = new THREE.Vector3( Math.cos( shipHeading ), 0, Math.sin( shipHeading ) ).normalize();
+				const desired = new THREE.Vector3().copy( shipPos ).addScaledVector( fwd, - 1.1 ).add( new THREE.Vector3( 0, 0.5, 0 ) );
+				camera.position.lerp( desired, 0.15 );
+				const lookAt = new THREE.Vector3().copy( shipPos ).addScaledVector( fwd, 0.6 );
+				camera.lookAt( lookAt );
+
+			}
+
+			function shipDynamics() {
+
+				readWaterLevelShader.uniforms[ 'levelTexture' ].value = tmpHeightmap;
+
+				for ( let i = 0; i < ships.length; i ++ ) {
+
+					const sphere = ships[ i ];
+
+					if ( sphere ) {
+
+						// Read water level and orientation
+						const u = 0.5 * sphere.position.x / BOUNDS_HALF + 0.5;
+						const v = 1 - ( 0.5 * sphere.position.z / BOUNDS_HALF + 0.5 );
+						readWaterLevelShader.uniforms[ 'point1' ].value.set( u, v );
+						gpuCompute.doRenderTarget( readWaterLevelShader, readWaterLevelRenderTarget );
+
+						renderer.readRenderTargetPixels( readWaterLevelRenderTarget, 0, 0, 4, 1, readWaterLevelImage );
+						const pixels = new Float32Array( readWaterLevelImage.buffer );
+
+						// Get orientation
+						waterNormal.set( pixels[ 1 ], 0, - pixels[ 2 ] );
+
+						const pos = sphere.position;
+
+						// vertical position from water
+						pos.y = pixels[ 0 ] + MODEL_HEIGHT_OFFSET;
+
+						// Apply player controls only to the single player ship
+						if ( sphere === playerShip ) {
+							const turnRate = 0.08;
+							const thrustAcc = 0.0008;
+							const drag = 0.985;
+							if ( shipControl.left ) shipHeading -= turnRate;
+							if ( shipControl.right ) shipHeading += turnRate;
+							if ( shipControl.thrust ) {
+								shipSpeed += thrustAcc;
+							} else {
+								shipSpeed *= drag;
+							}
+							if ( shipSpeed < 0 ) shipSpeed = 0;
+							const maxSpeed = 0.03;
+							if ( shipSpeed > maxSpeed ) shipSpeed = maxSpeed;
+							const moveDir = new THREE.Vector3( Math.cos( shipHeading ), 0, Math.sin( shipHeading ) );
+							pos.addScaledVector( moveDir, shipSpeed );
+							if ( shipRecoil && ( shipRecoil.x !== 0 || shipRecoil.z !== 0 ) ) {
+								pos.add( shipRecoil );
+								shipRecoil.multiplyScalar( RECOIL_DAMP );
+							}
+						}
+
+						const decal = 0.001;
+						const limit = BOUNDS_HALF - 0.2;
+
+						if ( pos.x < - limit ) {
+
+							pos.x = - limit + decal;
+							sphere.userData.velocity.x *= - 0.3;
+
+						} else if ( pos.x > limit ) {
+
+							pos.x = limit - decal;
+							sphere.userData.velocity.x *= - 0.3;
+
+						}
+
+						if ( pos.z < - limit ) {
+
+							pos.z = - limit + decal;
+							sphere.userData.velocity.z *= - 0.3;
+
+						} else if ( pos.z > limit ) {
+
+							pos.z = limit - decal;
+							sphere.userData.velocity.z *= - 0.3;
+
+						}
+
+						// ship orientation test
+
+						const startNormal = new THREE.Vector3( pixels[ 1 ], 1, - pixels[ 2 ] ).normalize();
+
+						let dir = new THREE.Vector3( 1, 0, 0 );
+						if ( sphere === playerShip ) {
+							dir = new THREE.Vector3( Math.cos( shipHeading ), 0, Math.sin( shipHeading ) );
+						}
+
+						const up = startNormal.clone().normalize();
+						const forward = dir.clone().normalize();
+						if ( MODEL_YAW_OFFSET ) forward.applyAxisAngle( up, MODEL_YAW_OFFSET );
+						// Map model local +X (nose) to movement direction
+						let xAxis = forward.clone();
+						let yAxis = up.clone();
+						let zAxis = new THREE.Vector3().crossVectors( xAxis, yAxis );
+						if ( zAxis.lengthSq() < 1e-8 ) zAxis.set( 0, 0, 1 );
+						zAxis.normalize();
+						// Re-orthogonalize y to ensure an orthonormal basis
+						yAxis = new THREE.Vector3().crossVectors( zAxis, xAxis ).normalize();
+						const m = new THREE.Matrix4().makeBasis( xAxis, yAxis, zAxis );
+						tmpQuat.setFromRotationMatrix( m );
+						sphere.quaternion.slerp( tmpQuat, 0.1 );
+
+					}
+
+				}
+
+				// Update floating balls: horizontal motion + collision + float on water
+				for ( let j = 0; j < floatingBalls.length; j ++ ) {
+
+					const b = floatingBalls[ j ];
+					const vel = b.userData.velocity || ( b.userData.velocity = new THREE.Vector3() );
+					const state = b.userData.state || 'water';
+					const ballLimit = BOUNDS_HALF - 0.2 - BALL_RADIUS;
+
+					if ( state === 'air' ) {
+						b.position.x += vel.x;
+						b.position.z += vel.z;
+						if ( typeof b.userData.velY !== 'number' ) b.userData.velY = 0;
+						b.userData.velY -= GRAVITY;
+						b.position.y += b.userData.velY;
+						vel.multiplyScalar( 0.995 );
+					} else if ( state === 'floor' ) {
+						b.position.y = BALL_RADIUS;
+						b.position.x += vel.x;
+						b.position.z += vel.z;
+						vel.multiplyScalar( 0.92 );
+						const maxX = HALF_OUTER - BALL_RADIUS;
+						const maxZ = HALF_OUTER - BALL_RADIUS;
+						if ( b.position.x < - maxX ) { b.position.x = - maxX; vel.x *= - 0.3; }
+						else if ( b.position.x > maxX ) { b.position.x = maxX; vel.x *= - 0.3; }
+						if ( b.position.z < - maxZ ) { b.position.z = - maxZ; vel.z *= - 0.3; }
+						else if ( b.position.z > maxZ ) { b.position.z = maxZ; vel.z *= - 0.3; }
+					} else {
+						b.position.x += vel.x;
+						b.position.z += vel.z;
+						vel.multiplyScalar( 0.985 );
+						if ( b.position.x < - ballLimit ) { b.position.x = - ballLimit; vel.x *= - 0.3; }
+						else if ( b.position.x > ballLimit ) { b.position.x = ballLimit; vel.x *= - 0.3; }
+						if ( b.position.z < - ballLimit ) { b.position.z = - ballLimit; vel.z *= - 0.3; }
+						else if ( b.position.z > ballLimit ) { b.position.z = ballLimit; vel.z *= - 0.3; }
+						if ( playerShip ) {
+							const sp2 = playerShip.position;
+							const toBall = new THREE.Vector3( b.position.x - sp2.x, 0, b.position.z - sp2.z );
+							const minDist2 = SHIP_RADIUS + BALL_RADIUS;
+							const distSq2 = toBall.x * toBall.x + toBall.z * toBall.z;
+							if ( distSq2 < minDist2 * minDist2 ) {
+								const dist2 = Math.sqrt( distSq2 ) || 1e-6;
+								toBall.multiplyScalar( 1 / dist2 );
+								const penetrate2 = minDist2 - dist2;
+								b.position.x += toBall.x * ( penetrate2 + 0.002 );
+								b.position.z += toBall.z * ( penetrate2 + 0.002 );
+								const fwd2 = new THREE.Vector3( Math.cos( shipHeading ), 0, Math.sin( shipHeading ) );
+								const impulse2 = shipSpeed * 0.8 + 0.02;
+								vel.x += toBall.x * impulse2 + fwd2.x * impulse2 * 0.5;
+								vel.z += toBall.z * impulse2 + fwd2.z * impulse2 * 0.5;
+								lastBumpedBall = b;
+								lastBumpTime = ( typeof performance !== 'undefined' && performance.now ) ? performance.now() : Date.now();
+							}
+						}
+					}
+
+					const bu = 0.5 * b.position.x / BOUNDS_HALF + 0.5;
+					const bv = 1 - ( 0.5 * b.position.z / BOUNDS_HALF + 0.5 );
+					readWaterLevelShader.uniforms[ 'point1' ].value.set( bu, bv );
+					gpuCompute.doRenderTarget( readWaterLevelShader, readWaterLevelRenderTarget );
+					renderer.readRenderTargetPixels( readWaterLevelRenderTarget, 0, 0, 4, 1, readWaterLevelImage );
+					const pixb = new Float32Array( readWaterLevelImage.buffer );
+					const waterY = pixb[ 0 ];
+
+					if ( state === 'air' ) {
+						const inside = ( Math.abs( b.position.x ) <= ballLimit && Math.abs( b.position.z ) <= ballLimit );
+						if ( ! inside && b.position.y <= BALL_RADIUS ) {
+							b.position.y = BALL_RADIUS;
+							b.userData.velY = 0;
+							b.userData.state = 'floor';
+							vel.multiplyScalar( 0.9 );
+						} else if ( inside && b.position.y <= waterY + BALL_RADIUS ) {
+							b.position.y = waterY + BALL_RADIUS;
+							b.userData.velY = 0;
+							b.userData.state = 'water';
+							vel.multiplyScalar( 0.7 );
+						}
+					} else if ( state === 'floor' ) {
+						const inside = ( Math.abs( b.position.x ) <= ballLimit && Math.abs( b.position.z ) <= ballLimit );
+						if ( inside ) {
+							b.position.y = waterY + BALL_RADIUS;
+							b.userData.state = 'water';
+						}
+					} else {
+						b.position.y = waterY + BALL_RADIUS;
+					}
+
+					// Back fence collision (block outside the goal gap)
+					{
+						const lastZf = b.userData.lastZ;
+						const insideGap = ( b.position.x > - GOAL_HALF_GAP + GOAL_POLE_RADIUS ) && ( b.position.x < GOAL_HALF_GAP - GOAL_POLE_RADIUS );
+						const lowEnough = ( b.position.y <= FENCE_HEIGHT + BALL_RADIUS + 0.02 );
+						if ( lastZf !== undefined && lastZf > FENCE_Z && b.position.z <= FENCE_Z && ! insideGap && lowEnough ) {
+							b.position.z = FENCE_Z + 0.001;
+							vel.z = Math.abs( vel.z ) * 0.4;
+						}
+						if ( ( b.userData.state === 'floor' ) && b.position.z < FENCE_Z && ! insideGap ) {
+							b.position.z = FENCE_Z + 0.001;
+							vel.z = Math.abs( vel.z ) * 0.3;
+						}
+					}
+
+					// Goal detection: crossing the goal line between posts
+					const lastZ = b.userData.lastZ;
+					const insideX = ( b.position.x > - GOAL_HALF_GAP + BALL_RADIUS ) && ( b.position.x < GOAL_HALF_GAP - BALL_RADIUS );
+					const crossed = ( lastZ !== undefined && lastZ > GOAL_Z && b.position.z <= GOAL_Z );
+					if ( insideX && crossed ) {
+						// remove ball and increment score
+						scene.remove( b );
+						if ( b.material && b.material !== ballMaterial ) { try { b.material.dispose(); } catch ( _e ) {} }
+						floatingBalls.splice( j, 1 );
+						j --;
+						goalScore ++;
+						if ( goalScoreEl ) goalScoreEl.textContent = 'Goals: ' + goalScore;
+						playGoalSfx();
+						triggerGoalFlash();
+						continue;
+					}
+
+					b.userData.lastZ = b.position.z;
+
+				}
+				resolveBallCollisions();
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			function onKeyDown( e ) {
+
+				if ( helpOpen ) { e.preventDefault(); return; }
+				if ( gameStopped ) { e.preventDefault(); return; }
+				unlockAudioOnce();
+
+				if ( e.code === 'ArrowUp' ) {
+					e.preventDefault();
+					shipControl.thrust = true;
+				}
+				if ( e.code === 'ArrowLeft' || e.code === 'KeyA' || e.code === 'KeyQ' ) {
+					e.preventDefault();
+					shipControl.left = true;
+				}
+				if ( e.code === 'ArrowRight' || e.code === 'KeyD' || e.code === 'KeyE' ) {
+					e.preventDefault();
+					shipControl.right = true;
+				}
+				if ( e.code === 'Space' || e.code === 'Spacebar' || e.key === ' ' ) {
+					if ( e.repeat ) return;
+					e.preventDefault();
+					if ( e.stopImmediatePropagation ) e.stopImmediatePropagation();
+					if ( e.stopPropagation ) e.stopPropagation();
+					shootBallIfBumping();
+				}
+				if ( e.code === 'KeyS' || e.key === 'S' || e.key === 's' ) {
+					if ( e.repeat ) return;
+					e.preventDefault();
+					if ( e.stopImmediatePropagation ) e.stopImmediatePropagation();
+					if ( e.stopPropagation ) e.stopPropagation();
+					if ( ! audioCtx ) audioInit();
+					if ( audioSilenced ) {
+						// Unmute: reconnect and resume context, ramp up gains
+						if ( audioCtx ) {
+							try { masterGain.connect( audioCtx.destination ); } catch ( _e ) {}
+							try { reverbGain.connect( audioCtx.destination ); } catch ( _e ) {}
+							if ( audioCtx.state === 'suspended' ) audioCtx.resume();
+							const now = audioCtx.currentTime;
+							if ( masterGain && masterGain.gain ) {
+								masterGain.gain.cancelScheduledValues( now );
+								masterGain.gain.setValueAtTime( masterGain.gain.value, now );
+								masterGain.gain.linearRampToValueAtTime( 0.2, now + 0.08 );
+							}
+							if ( reverbGain && reverbGain.gain ) {
+								reverbGain.gain.cancelScheduledValues( now );
+								reverbGain.gain.setValueAtTime( reverbGain.gain.value, now );
+								reverbGain.gain.linearRampToValueAtTime( 0.25, now + 0.08 );
+							}
+						}
+						audioSilenced = false;
+					} else {
+						// Mute: ramp down, stop voices/rhythm, disconnect, suspend
+						if ( audioCtx ) {
+							const now = audioCtx.currentTime;
+							masterGain.gain.cancelScheduledValues( now );
+							masterGain.gain.setTargetAtTime( 0.0001, now, 0.1 );
+							reverbGain.gain.cancelScheduledValues( now );
+							reverbGain.gain.setTargetAtTime( 0.0001, now, 0.1 );
+							// Stop any scheduled rhythm/voices and clear state
+							stopChord();
+							for ( const node of transientNodes ) {
+								try { node.stop( 0 ); } catch ( _e ) {}
+								try { node.disconnect(); } catch ( _e ) {}
+							}
+							transientNodes.clear();
+							for ( const [ f, vg ] of activeVoices ) {
+								try { if ( vg.osc1 ) vg.osc1.stop( 0 ); } catch ( _e ) {}
+								try { if ( vg.osc2 ) vg.osc2.stop( 0 ); } catch ( _e ) {}
+							}
+							activeVoices.clear();
+							lastChordId = null;
+							currentChordFreqs = null;
+							stopRhythm();
+							// Hard mute path by disconnecting buses
+							try { masterGain.disconnect(); } catch ( _e ) {}
+							try { reverbGain.disconnect(); } catch ( _e ) {}
+							// Ensure absolute silence by suspending the context shortly after the ramp
+							setTimeout( () => { if ( audioCtx && audioCtx.state !== 'suspended' ) audioCtx.suspend(); }, 120 );
+						}
+						mousedown = false;
+						if ( controls ) controls.enabled = ! followCamera;
+						audioSilenced = true;
+						sustainActive = false;
+						if ( sustainTimer ) { clearTimeout( sustainTimer ); sustainTimer = null; }
+					}
+				}
+
+				if ( e.code === 'KeyC' || e.key === 'c' || e.key === 'C' ) {
+					if ( e.repeat ) return;
+					e.preventDefault();
+					if ( e.stopImmediatePropagation ) e.stopImmediatePropagation();
+					if ( e.stopPropagation ) e.stopPropagation();
+					toggleFollowCamera();
+				}
+
+			}
+
+			function onKeyUp( e ) {
+
+				if ( helpOpen ) { e.preventDefault(); return; }
+				if ( e.code === 'ArrowUp' ) {
+					e.preventDefault();
+					shipControl.thrust = false;
+					shipPopFrames = 10;
+				}
+				if ( e.code === 'ArrowLeft' || e.code === 'KeyA' || e.code === 'KeyQ' ) {
+					e.preventDefault();
+					shipControl.left = false;
+				}
+				if ( e.code === 'ArrowRight' || e.code === 'KeyD' || e.code === 'KeyE' ) {
+					e.preventDefault();
+					shipControl.right = false;
+				}
+
+			}
+
+			function onPointerDown( e ) {
+
+				if ( helpOpen ) { e.preventDefault(); return; }
+				if ( gameStopped ) { e.preventDefault(); return; }
+
+				unlockAudioOnce();
+
+				mousedown = true;
+				mouseButton = ( e && typeof e.button === 'number' ) ? e.button : 0;
+				if ( mouseButton === 0 ) leftDown = true;
+				if ( mouseButton === 2 ) rightDown = true;
+				audioSilenced = false;
+				if ( e && e.button === 2 ) {
+					sustainActive = false;
+					const dom = renderer.domElement;
+					const ndc = new THREE.Vector2( ( e.clientX / dom.clientWidth ) * 2 - 1, - ( e.clientY / dom.clientHeight ) * 2 + 1 );
+					raycaster.setFromCamera( ndc, camera );
+					if ( meshRay ) {
+						const intersects = raycaster.intersectObject( meshRay );
+						if ( intersects.length > 0 ) {
+							const p = intersects[ 0 ].point;
+							spawnBallAt( p.x, p.z );
+						}
+					}
+				} else {
+					sustainActive = false;
+					if ( sustainTimer ) { clearTimeout( sustainTimer ); sustainTimer = null; }
+				}
+				if ( ! audioCtx ) audioInit();
+				if ( audioCtx && audioCtx.state === 'suspended' ) audioCtx.resume();
+
+			}
+
+			function onPointerUp( e ) {
+
+				if ( helpOpen ) { e.preventDefault(); return; }
+				const b = ( e && typeof e.button === 'number' ) ? e.button : mouseButton;
+				const wasLeft = leftDown;
+				const wasRight = rightDown;
+				if ( b === 0 ) leftDown = false;
+				if ( b === 2 ) rightDown = false;
+				mousedown = leftDown || rightDown;
+				controls.enabled = ! followCamera;
+				if ( b === 0 && wasLeft ) {
+					if ( sustainActive ) {
+						if ( sustainTimer ) { clearTimeout( sustainTimer ); }
+						sustainTimer = setTimeout( () => { softStopChord( 2.2, 1.0 ); sustainActive = false; sustainTimer = null; }, 2000 );
+					} else {
+						stopChord();
+					}
+				}
+				if ( ! mousedown ) mouseButton = -1;
+
+			}
+
+			function onPointerCancel( e ) {
+
+				if ( helpOpen ) { e.preventDefault(); return; }
+				const b = ( e && typeof e.button === 'number' ) ? e.button : mouseButton;
+				const wasLeft = leftDown;
+				const wasRight = rightDown;
+				if ( b === 0 ) leftDown = false;
+				if ( b === 2 ) rightDown = false;
+				mousedown = leftDown || rightDown;
+				controls.enabled = ! followCamera;
+				if ( b === 0 && wasLeft ) {
+					if ( sustainActive ) {
+						if ( sustainTimer ) { clearTimeout( sustainTimer ); }
+						sustainTimer = setTimeout( () => { softStopChord( 2.2, 1.0 ); sustainActive = false; sustainTimer = null; }, 2000 );
+					} else {
+						stopChord();
+					}
+				}
+				if ( ! mousedown ) mouseButton = -1;
+
+			}
+
+			function onPointerMove( event ) {
+
+				if ( helpOpen ) return;
+				const dom = renderer.domElement;
+				mouseCoords.set( ( event.clientX / dom.clientWidth ) * 2 - 1, - ( event.clientY / dom.clientHeight ) * 2 + 1 );
+
+			}
+
+			function raycast() {
+
+				// Set uniforms: mouse interaction
+				const uniforms = heightmapVariable.material.uniforms;
+
+				// Ship wake: generate waves only while thrusting; add a brief pop lift on release
+				if ( playerShip ) {
+					if ( shipPopFrames > 0 ) {
+						const p = playerShip.position;
+						uniforms[ 'shipPos' ].value.set( p.x, p.z );
+						uniforms[ 'shipDeep' ].value = - effectController.mouseDeep;
+						shipPopFrames --;
+					} else if ( shipControl && shipControl.thrust ) {
+						const p = playerShip.position;
+						const fwd = new THREE.Vector3( Math.cos( shipHeading ), 0, Math.sin( shipHeading ) );
+						const wakeOffset = 0.24;
+						const wx = p.x - fwd.x * wakeOffset;
+						const wz = p.z - fwd.z * wakeOffset;
+						uniforms[ 'shipPos' ].value.set( wx, wz );
+						uniforms[ 'shipDeep' ].value = effectController.mouseDeep * 0.6;
+					} else {
+						uniforms[ 'shipPos' ].value.set( 10000, 10000 );
+						uniforms[ 'shipDeep' ].value = 0.0;
+					}
+				}
+
+				if ( audioSilenced ) {
+					uniforms[ 'mousePos' ].value.set( 10000, 10000 );
+					if ( ! sustainActive ) stopChord();
+					return;
+				}
+
+				if ( mousedown ) {
+
+					raycaster.setFromCamera( mouseCoords, camera );
+
+					const intersects = raycaster.intersectObject( meshRay );
+
+					if ( intersects.length > 0 ) {
+
+						const point = intersects[ 0 ].point;
+						uniforms[ 'mousePos' ].value.set( point.x, point.z );
+						if ( controls.enabled ) controls.enabled = false;
+						if ( audioCtx && leftDown ) { const freqs = chordForPoint( point.x, point.z ); playChord( freqs ); }
+
+					} else {
+
+						uniforms[ 'mousePos' ].value.set( 10000, 10000 );
+						if ( leftDown && ! sustainActive ) stopChord();
+
+					}
+
+				} else {
+
+					uniforms[ 'mousePos' ].value.set( 10000, 10000 );
+
+				}
+
+			}
+
+			function animate() {
+
+				render();
+				stats.update();
+
+			}
+
+			function render() {
+
+				raycast();
+
+				frame ++;
+
+				if ( frame >= 7 - effectController.speed ) {
+
+					// Do the gpu computation
+					gpuCompute.compute();
+					tmpHeightmap = gpuCompute.getCurrentRenderTarget( heightmapVariable ).texture;
+
+					if ( shipsEnabled ) shipDynamics();
+
+					// Get compute output in custom uniform
+					if ( waterMesh ) waterMesh.material.heightmap = tmpHeightmap;
+
+					frame = 0;
+
+				}
+
+				// Render
+				updateFollowCamera();
+				updateMuzzleFlashes();
+				renderer.render( scene, camera );
+
+			}
+
+
+			//----------------------
+
+			class WaterMaterial extends THREE.MeshStandardMaterial {
+
+				constructor( parameters ) {
+
+					super();
+
+					this.defines = {
+
+						'STANDARD': '',
+						'USE_UV': '',
+						'WIDTH': WIDTH.toFixed( 1 ),
+						'BOUNDS': BOUNDS.toFixed( 1 ),
+
+					};
+
+					this.extra = {};
+
+					this.addParameter( 'heightmap', null );
+
+					this.setValues( parameters );
+
+				}
+
+				addParameter( name, value ) {
+
+					this.extra[ name ] = value;
+					Object.defineProperty( this, name, {
+						get: () => ( this.extra[ name ] ),
+						set: ( v ) => {
+
+							this.extra[ name ] = v;
+							if ( this.userData.shader ) this.userData.shader.uniforms[ name ].value = this.extra[ name ];
+
+						}
+					} );
+
+				}
+
+				onBeforeCompile( shader ) {
+
+					for ( const name in this.extra ) {
+
+						shader.uniforms[ name ] = { value: this.extra[ name ] };
+
+					}
+
+					shader.vertexShader = shader.vertexShader.replace( '#include <common>', shaderChange.common );
+					//shader.vertexShader = 'uniform sampler2D heightmap;\n' + shader.vertexShader;
+					shader.vertexShader = shader.vertexShader.replace( '#include <beginnormal_vertex>', shaderChange.beginnormal_vertex );
+					shader.vertexShader = shader.vertexShader.replace( '#include <begin_vertex>', shaderChange.begin_vertex );
+
+					this.userData.shader = shader;
+
+				}
+
+			}
+
+
+			const shaderChange = {
+
+				heightmap_frag: /* glsl */`
+				#include <common>
+				
+				uniform vec2 mousePos;
+				uniform float mouseSize;
+				uniform float viscosity;
+				uniform float deep;
+				uniform vec2 shipPos;
+				uniform float shipDeep;
+				
+				void main()	{
+
+				vec2 cellSize = 1.0 / resolution.xy;
+
+				vec2 uv = gl_FragCoord.xy * cellSize;
+
+				// heightmapValue.x == height from previous frame
+				// heightmapValue.y == height from penultimate frame
+				// heightmapValue.z, heightmapValue.w not used
+				vec4 heightmapValue = texture2D( heightmap, uv );
+
+				// Get neighbours
+				vec4 north = texture2D( heightmap, uv + vec2( 0.0, cellSize.y ) );
+				vec4 south = texture2D( heightmap, uv + vec2( 0.0, - cellSize.y ) );
+				vec4 east = texture2D( heightmap, uv + vec2( cellSize.x, 0.0 ) );
+				vec4 west = texture2D( heightmap, uv + vec2( - cellSize.x, 0.0 ) );
+
+				//float newHeight = ( ( north.x + south.x + east.x + west.x ) * 0.5 - heightmapValue.y ) * viscosity;
+				float newHeight = ( ( north.x + south.x + east.x + west.x ) * 0.5 - (heightmapValue.y) ) * viscosity;
+
+
+					// Mouse influence
+					float mousePhase = clamp( length( ( uv - vec2( 0.5 ) ) * BOUNDS - vec2( mousePos.x, - mousePos.y ) ) * PI / mouseSize, 0.0, PI );
+					//newHeight += ( cos( mousePhase ) + 1.0 ) * 0.28 * 10.0;
+					newHeight -= ( cos( mousePhase ) + 1.0 ) * deep;
+
+					// Ship wake influence (same profile as mouse)
+					float shipPhase = clamp( length( ( uv - vec2( 0.5 ) ) * BOUNDS - vec2( shipPos.x, - shipPos.y ) ) * PI / mouseSize, 0.0, PI );
+					newHeight -= ( cos( shipPhase ) + 1.0 ) * shipDeep;
+
+				heightmapValue.y = heightmapValue.x;
+				heightmapValue.x = newHeight;
+
+				gl_FragColor = heightmapValue;
+
+				}
+				`,
+				// FOR MATERIAL
+				common: /* glsl */`
+				#include <common>
+				uniform sampler2D heightmap;
+				`,
+				beginnormal_vertex: /* glsl */`
+				vec2 cellSize = vec2( 1.0 / WIDTH, 1.0 / WIDTH );
+				vec3 objectNormal = vec3(
+				( texture2D( heightmap, uv + vec2( - cellSize.x, 0 ) ).x - texture2D( heightmap, uv + vec2( cellSize.x, 0 ) ).x ) * WIDTH / BOUNDS,
+				( texture2D( heightmap, uv + vec2( 0, - cellSize.y ) ).x - texture2D( heightmap, uv + vec2( 0, cellSize.y ) ).x ) * WIDTH / BOUNDS,
+				1.0 );
+				#ifdef USE_TANGENT
+					vec3 objectTangent = vec3( tangent.xyz );
+				#endif
+				`,
+				begin_vertex: /* glsl */`
+				float heightValue = texture2D( heightmap, uv ).x;
+				vec3 transformed = vec3( position.x, position.y, heightValue );
+				#ifdef USE_ALPHAHASH
+					vPosition = vec3( position );
+				#endif
+				`,
+			};
+
+		</script>
+	</body>
+</html>

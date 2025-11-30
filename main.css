@@ -1,0 +1,186 @@
+body {
+	margin: 0;
+	background-color: #000;
+	color: #fff;
+	font-family: Monospace;
+	font-size: 13px;
+	line-height: 24px;
+	overscroll-behavior: none;
+}
+
+a {
+	color: #ff0;
+	text-decoration: none;
+}
+
+a:hover {
+	text-decoration: underline;
+}
+
+button {
+	cursor: pointer;
+	text-transform: uppercase;
+}
+
+#info {
+	position: fixed;
+	top: 0px;
+	width: 100%;
+	padding: 10px;
+	box-sizing: border-box;
+	text-align: center;
+	font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+	font-size: 16px;
+	-moz-user-select: none;
+	-webkit-user-select: none;
+	-ms-user-select: none;
+	user-select: none;
+	pointer-events: none;
+	z-index: 25000; /* TODO Solve this in HTML */
+	background: rgba(0, 0, 0, 0.35);
+}
+
+a, button, input, select {
+	pointer-events: auto;
+}
+
+.lil-gui {
+	z-index: 2 !important; /* TODO Solve this in HTML */
+}
+
+@media all and ( max-width: 640px ) {
+	.lil-gui.root { 
+		right: auto;
+		top: auto;
+		max-height: 50%;
+		max-width: 80%;
+		bottom: 0;
+		left: 0;
+	}
+}
+
+#overlay {
+	position: absolute;
+	font-size: 16px;
+	z-index: 2;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex-direction: column;
+	background: rgba(0,0,0,0.7);
+}
+
+	#overlay button {
+		background: transparent;
+		border: 0;
+		border: 1px solid rgb(255, 255, 255);
+		border-radius: 4px;
+		color: #ffffff;
+		padding: 12px 18px;
+		text-transform: uppercase;
+		cursor: pointer;
+	}
+
+#notSupported {
+	width: 50%;
+	margin: auto;
+	background-color: #f00;
+	margin-top: 20px;
+	padding: 10px;
+}
+
+#commercial {
+	position: fixed;
+	top: 20px;
+	right: 20px;
+	width: 260px;
+	text-align: right;
+	z-index: 25000;
+	pointer-events: none;
+}
+
+#commercial img {
+	width: 100%;
+	height: auto;
+	display: inline-block;
+}
+
+/* Help button in top info bar */
+#info .help-btn {
+	margin-top: 6px;
+	padding: 8px 12px;
+	font-size: 14px;
+	font-weight: 600;
+	border-radius: 6px;
+	border: none;
+	background: #2a74ff;
+	color: #fff;
+	box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+}
+
+/* Modal backdrop and content */
+.modal-backdrop {
+    display: none; /* shown via JS */
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.75);
+    justify-content: center;
+    align-items: center;
+    z-index: 30000;
+}
+
+body.modal-open {
+    overflow: hidden;
+}
+
+.modal {
+	background: #222;
+	border-radius: 10px;
+	max-width: 640px;
+	width: 90%;
+	max-height: 80vh;
+	overflow-y: auto;
+	box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6);
+	padding: 1.5rem 1.75rem;
+	position: relative;
+	color: #f5f5f5;
+	font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.modal h2 {
+	margin: 0 0 0.5rem 0;
+}
+
+.modal h3 {
+	margin: 1rem 0 0.4rem 0;
+	font-size: 1.1rem;
+	color: #90caf9;
+}
+
+.modal ul {
+	margin: 0.25rem 0 0.5rem 1rem;
+	padding-left: 1rem;
+}
+
+.modal li {
+	margin-bottom: 0.25rem;
+}
+
+.close-btn {
+	position: absolute;
+	right: 0.9rem;
+	top: 0.7rem;
+	background: none;
+	border: none;
+	color: #aaa;
+	font-size: 1.3rem;
+	cursor: pointer;
+}
+
+.close-btn:hover {
+	color: #fff;
+}
